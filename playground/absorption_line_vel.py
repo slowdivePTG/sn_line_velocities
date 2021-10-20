@@ -12,30 +12,88 @@ mpl.rcParams['font.size'] = '25'
 mpl.rcParams['xtick.labelsize'] = '20'
 mpl.rcParams['ytick.labelsize'] = '20'
 
+import warnings
+
 
 ##################### SpectrumSN class ##########################
 
 
-class SpectrumSN():
-    '''1D optical spectrum'''
+class SpectrumSN(object):
+    '''1D optical spectrum
+
+    Attributes
+    ----------
+    fl : array_like
+        flux (in arbitrary units)
+
+    wv_rf : array_like
+        wavelength [angstrom] in the host galaxy's rest frame:
+        wv_rf = wavelength / (1 + z)
+
+    fl_unc : array_like
+        uncertainty in flux (in arbitrary units)
+
+    Methods
+    -------
+    plot_line_region(blue_edge, red_edge) :
+        plot the spectrum in the line region
+
+    get_flux_at_lambda(lambda_0, delta_l=50) :
+        pget the flux and its uncertainty at some given wavelength
+    '''
 
     def __init__(self, spec1D, z=0):
+        '''Constructor
+
+        Parameters
+        ----------
+        spec1D : str
+            the spectrum file (directory + filename)
+
+        z : float (default=0)
+            host galaxy redshift
+        '''
 
         spec_df = pd.read_csv(spec1D,
                               comment='#',
                               delim_whitespace=True,
                               header=None)
+
         wv = spec_df[0].values
         wv_rf = wv / (1 + z)
         fl = spec_df[1].values
-        fl_unc = spec_df[2].values
 
-        self.fl = fl
-        self.wv_rf = wv_rf
-        self.fl_unc = fl_unc
+        try:
+            if 'Keck' in spec1D:
+                fl_unc = spec_df[3].values
+            else:
+                fl_unc = spec_df[2].values
+
+                if 'P60' in spec1D:
+                    fl_unc **= .5
+
+            rel_unc = fl_unc / fl
+            rel_unc[rel_unc < 1e-3] = np.median(rel_unc[rel_unc > 1e-3])
+            fl_unc = rel_unc * fl
+        except:
+            warnings.warn("No flux uncertainty in the datafile!")
+            # set relative uncertainty to be 1%
+            fl_unc = np.ones_like(fl) * 1e-2 * np.median(fl)
+
+        # make sure flux measurements are positive
+        self.fl = fl[fl > 0]
+        self.wv_rf = wv_rf[fl > 0]
+        self.fl_unc = fl_unc[fl > 0]
 
     def plot_line_region(self, blue_edge, red_edge):
-        '''plot the spectrum in the line region'''
+        '''Plot the spectrum in the line region
+
+        Parameters
+        ----------
+        blue_edge, red_edge : float
+            the wavelength [angstrom] (host galaxy frame) 
+            at the blue/red edge
+        '''
         line_region = np.where(
             (self.wv_rf < red_edge) & (self.wv_rf > blue_edge))[0]
 
@@ -47,39 +105,195 @@ class SpectrumSN():
         plt.show()
 
     def get_flux_at_lambda(self, lambda_0, delta_l=50):
-        '''get the flux and its uncertainty at some given wavelength'''
+        '''Get the flux and uncertainty at some given wavelength
+
+        Returns the mean and uncertainty of flux in the 
+        wavelength range: [lambda_0 - delta_l, lambda_0 + delta_l]
+
+        Parameters
+        ----------
+        lambda_0 : float
+            the central wavelength [angstrom]
+
+        delta_l : float, default=50
+            the size of the wavelength interval [angstrom]
+
+        Returns
+        -------
+        mean : float
+            mean flux around the central wavelength
+
+        std : float
+            multiple measurements:
+                standard deviation in flux around the central wavelength
+            single measurement:
+                flux uncertainty given
+        '''
 
         region = np.where(np.abs(self.wv_rf - lambda_0) < delta_l)[0]
-        if len(region) <= 1:
-            print('Warning: too few points within the wavelength range!')
-            return (self.fl[region], self.fl_unc[region])
-        else:
-            mean = self.fl[region].mean()
-            std = np.std(self.fl[region], ddof=1)
-        return (mean, std)
+        try:
+            if len(region) == 0:
+                raise IndexError('No data within this range!')
+            if len(region) == 1:
+                warnings.warn('Too few points within the wavelength range!')
+                return (self.fl[region], self.fl_unc[region])
+            else:
+                mean = self.fl[region].mean()
+                std = np.std(self.fl[region], ddof=1)
+            return (mean, std)
+        except IndexError as e:
+            repr(e)
+            return None, None
 
 
 class SpectrumSN_Lines(SpectrumSN):
-    '''A set of measurements on different absorption lines'''
+    '''A set of measurements on different absorption lines
+
+    Children class of SpectrumSN
+
+    Attributes
+    ----------
+    Spec1D : str
+        the spectrum file (directory + filename)
+
+    z : float
+        host galaxy redshift
+
+    spec_name : str
+        spectrum name based on the filename
+        source name + date + instrument
+
+    line : dict
+        a dictionary of various lines (AbsorbLine objects)
+
+    Methods
+    -------
+    add_line(name, blue_edge, red_edge, lines=[])) :
+        Add one (series of) absorption line(s)
+    '''
 
     def __init__(self, spec1D, z):
+        '''Constructor
+
+        Parameters
+        ----------
+        spec1D : str
+            the spectrum file (directory + filename)
+
+        z : float (default=0)
+            host galaxy redshift
+        '''
         super(SpectrumSN_Lines, self).__init__(spec1D, z)
         self.spec1D = spec1D
         self.z = z
-        self.spec_name = spec1D[spec1D.find('ZTF'):]
+        self.spec_name = spec1D[spec1D.find('ZTF'):spec1D.find('.ascii')]
         self.line = {}
 
     def add_line(self, name, blue_edge, red_edge, lines=[]):
+        '''Add one (series of) absorption line(s)
+
+        Construct a new AbsorbLine object, and save it in self.line
+
+        Parameters
+        ----------
+        name : str
+            the name of the absorption line
+
+        blue_edge, red_edge : float
+            the wavelength [angstrom] (host galaxy frame) at 
+            the blue/red edge
+
+        lines : array_like, default=[]
+            the central wavelength(s) [angstrom] of this 
+            (series) of line(s)
+        '''
         self.line[name] = AbsorbLine(
             self.spec1D, self.z, blue_edge, red_edge, lines)
 
 
 class AbsorbLine(SpectrumSN):
-    '''an absorption line in a 1D optical spectrum'''
+    '''A (series of) absorption line(s) in a 1D optical spectrum
+
+    Attributes
+    ----------
+    wv_line : array_like
+        the wavelength range [angstrom] of the line 
+        (host galaxy frame)
+
+    norm_fl : array_like
+        flux normalized by the median value
+
+    norm_fl_unc : array_like
+        normalized flux uncertainty
+
+    blue_fl, red_fl : list
+        normalized flux and uncertainty at the blue/red edge
+
+    vel_rf : array_like
+        relative velocities of each point with respect 
+        to the center of absorption
+
+    blue_vel, red_vel : float
+        relative velocity at the blue/red edge
+
+    delta_vel_components : array_like, default=[]
+        relative velocities of other absorption lines (if any)
+        with respect to the default one at v=0
+
+    theta_LS : array_like
+        best fit with least square methods, powered by
+        scipy.optimize.minimize()
+
+    chi2_LS : float
+        the minimized residual with least square methods
+
+    theta_MCMC : array_like
+        best fit with an MCMC sampler, approximated by median 
+        values in the MCMC chains
+
+    sig_theta_MCMC : array_like
+        1 sigma uncertainty for each parameter, approximated 
+        by the half the range of 16 and 84 percentile values 
+        in the MCMC chains
+
+
+
+    Methods
+    -------
+    LS_estimator(guess=(1, 1, -10000, 15, -1000)) :
+        Least square point estimation
+
+    MCMC_sampler(mu_pvf=-1e4, var_pvf=1e7,
+                 nwalkers=100, nsteps=1500, 
+                 nburn=500, initial=[],
+                 normalize_unc=False) :
+        An MCMC sampler
+
+    plot_model(theta) :
+        Plot the predicted absorption features
+
+    '''
 
     def __init__(self, spec1D, z,
                  blue_edge, red_edge,
                  lines=[]):
+        '''Constructor
+
+        Parameters
+        ----------
+        spec1D: str
+            the spectrum file (directory + filename)
+
+        z: float (default=0)
+            host galaxy redshift
+
+        blue_edge, red_edge: float
+            the wavelength [angstrom] (host galaxy frame) at the blue/red edge
+
+        lines: array_like, default=[]
+            the central wavelength(s) [angstrom] of this (series) of line(s)
+            (e.g. [6371.359, 6347.103])
+        '''
 
         super(AbsorbLine, self).__init__(spec1D, z)
 
@@ -113,21 +327,44 @@ class AbsorbLine(SpectrumSN):
         self.delta_vel_components = [
             velocity_rf(lambda_0, l) for l in lines[:-1]]
 
-    def LS_estimator(self, guess=(1, 1, -10000, 15, -1000)):
-        '''Least square point estimation'''
+        self.theta_LS = []
+        self.chi2_LS = np.nan
 
-        self.ml_res = minimize(
+        self.theta_MCMC = []
+        self.sig_theta_MCMC = []
+
+    def LS_estimator(self, guess=(1, 1, -10000, 15, -1000)):
+        '''Least square point estimation
+
+        Parameters
+        ----------
+        guess: tuple, default=(1, 1, -10000, 15, -1000)
+            an initial guess for the fitting parameter theta
+        '''
+
+        LS_res = minimize(
             neg_lnlike_gaussian_abs,
             guess,
             method='Powell',  # Powell method does not need derivatives
             args=(self.blue_vel, self.red_vel, self.vel_rf, self.norm_fl,
                   self.delta_vel_components, self.norm_fl_unc, 'chi2'))
 
-        self.theta_LS = self.ml_res['x']
+        self.theta_LS = LS_res['x']
+        self.chi2_LS = LS_res['fun']
 
         self.plot_model(self.theta_LS)
 
-        print(self.theta_LS)
+        # print(self.theta_LS)
+        ndim = len(self.theta_LS)
+        print('LS estimation:')
+        if ndim == 5:
+            print('Velocity pvf: {:.0f} km/s'.format(
+                self.theta_LS[2]))
+        elif ndim == 8:
+            print('Velocity pvf: {:.0f} km/s'.format(
+                self.theta_LS[2]))
+            print('Velocity hvf: {:.0f} km/s'.format(
+                self.theta_LS[5]))
 
     def MCMC_sampler(self,
                      mu_pvf=-1e4, var_pvf=1e7,
@@ -137,40 +374,43 @@ class AbsorbLine(SpectrumSN):
 
         Parameters
         ----------
-        mu_pvf: float (default=-1e4)
+        mu_pvf : float, default=-1e4
             mean of the pvf profile prior
 
-        var_pvf: float (default=1e7)
+        var_pvf : float, default=1e7
             var of the pvf profile prior
 
-        nwalkers: int (default=100)
+        nwalkers : int, default=100
+            number of MCMC sampler walkers
 
-        nsteps: int (default=1500)
+        nsteps : int, default=1500
+            MCMC chain length
 
-        nburn: int (default=500)
+        nburn : int, default=500
+            number of "burn-in" steps for the MCMC chains
 
-        initial: list (default=[])
+        initial : array_like, default=[]
+             initial values for the MCMC sampler
 
-        normalize_unc: boolean (default=False)
+        normalize_unc : bool, default=False
             whether to normalize the flux uncertainty based on the
             residual of a former LS estimation
 
-
-        Return
-        ------
+        Returns
+        -------
         sampler : emcee EnsembleSampler object
             emcee affine-invariant multi-chain MCMC sampler
 
         '''
 
         if len(initial) == 0:
-            initial = self.ml_res['x']
+            initial = self.theta_LS
 
         ndim = len(initial)
         p0 = [i + initial for i in np.random.randn(nwalkers, ndim) * 1e-5]
 
         if normalize_unc:
-            norm_fac = (self.ml_res['fun'] / len(vel_rf))**.5
+            norm_fac = (self.chi2_LS / len(vel_rf))**.5
         else:
             norm_fac = 1
 
@@ -193,6 +433,7 @@ class AbsorbLine(SpectrumSN):
 
         self.plot_model(self.theta_LS)
 
+        print('MCMC results:')
         if ndim == 5:
             print('Velocity pvf: {:.0f} pm {:.0f} km/s'.format(
                 self.theta_MCMC[2], self.sig_theta_MCMC[2]))
@@ -205,6 +446,16 @@ class AbsorbLine(SpectrumSN):
         return sampler
 
     def plot_model(self, theta):
+        '''Plot the predicted absorption features
+
+        Parameters
+        ----------
+        theta : array_like
+        fitting parameters: flux at the blue edge, flux at the
+        red edge, (mean of relative velocity, log variance,
+        amplitude) * Number of velocity components
+        '''
+
         plt.figure(figsize=(10, 10))
         model_flux = flux_gauss(theta,
                                 self.blue_vel, self.red_vel,
@@ -225,25 +476,14 @@ class AbsorbLine(SpectrumSN):
                      color='k', alpha=0.8, linewidth=3)
             plt.plot(self.vel_rf, model2_flux,
                      color='k', alpha=0.4, linewidth=3)
+
+        plt.xlabel(r'$v\ [\mathrm{km/s}]$')
+        plt.ylabel(r'$\mathrm{Normalized\ Flux}$')
         plt.tight_layout()
         plt.show()
 
 
 ###################### Basic Functions ##########################
-
-
-def divide_continuum(lambda_rf, flux, blue_continuum, red_continuum):
-    '''Divide out linear continuum factor'''
-
-    def linear_continuum(slope, wave, wave0, flux0): return slope * (wave - wave0
-                                                                     ) + flux0
-
-    slope = (blue_continuum[1] - red_continuum[1]) / (blue_continuum[0] -
-                                                      red_continuum[0])
-    norm_flux = flux / linear_continuum(slope, lambda_rf, blue_continuum[0],
-                                        blue_continuum[1])
-
-    return norm_flux
 
 
 def velocity_rf(lambda_rf, lambda_0):
@@ -266,29 +506,27 @@ def flux_gauss(theta, blue_vel, red_vel, vel_rf, delta_vel_components=[]):
 
     Parameters
     ----------
-
-    theta: list
+    theta : array_like
         fitting parameters: flux at the blue edge, flux at the
         red edge, (mean of relative velocity, log variance,
         amplitude) * Number of velocity components
 
-    blue_vel, red_vel: float
-        the relative velocity at the blue/red edge
+    blue_vel, red_vel : float
+        the relative velocity [km/s] at the blue/red edge
 
-    vel_ref: float
-        relative velocities for each flux measurement
+    vel_ref : float
+        relative velocities [km/s] for each flux measurement
 
-    norm_flux: float
+    norm_flux : float
         normalized flux
 
-    delta_vel_components: list (default=[])
+    delta_vel_components : array_like (default=[])
         relative velocities of other absorption lines (if any)
         with respect to the default one at v=0
 
     Returns
     -------
-
-    model_flux:
+    model_flux : array_like
         predicted (normalized) flux at each relative radial
         velocity
     '''
@@ -322,38 +560,38 @@ def lnlike_gaussian_abs(theta,
                         delta_vel_components=[],
                         flux_unc=1,
                         type='gaussian'):
-    '''Log likelihood function
+    '''Log likelihood function assuming Gaussian profile
 
     Parameters
     ----------
-    theta: list
+    theta : array_like
         fitting parameters: flux at the blue edge, flux at the
         red edge, (mean of relative velocity, log variance,
         amplitude) * Number of velocity components
 
-    blue_vel, red_vel: float
-        the relative velocity at the blue/red edge
+    blue_vel, red_vel : float
+        the relative velocity [km/s] at the blue/red edge
 
-    vel_ref: float
-        relative velocities for each flux measurement
+    vel_ref : float
+        relative velocities [km/s] for each flux measurement
 
-    norm_flux: float
+    norm_flux : float
         normalized flux
 
-    delta_vel_components: list (default=[])
+    delta_vel_components : array_like, default=[]
         relative velocities of other absorption lines (if any)
         with respect to the default one at v=0
 
-    flux_unc: float
+    flux_unc : float
         uncertainty in normalized flux
 
-    type: string (default='gaussian')
+    type : ['gaussian', 'chi2'], default='gaussian'
         'gaussian': Gaussian likelihood (for mcmc)
         'chi2': chi2 likelihood (for least square estimation)
 
     Returns
     -------
-    lnl: float
+    lnl : float
         the log likelihood function
     '''
 
@@ -397,6 +635,31 @@ def lnprior(
     blue_fl=[1, .1],
     red_fl=[1, .1],
 ):
+    '''log-prior probability
+
+
+    Parameters
+    ----------
+    theta : array_like
+        fitting parameters: flux at the blue edge, flux at the
+        red edge, (mean of relative velocity, log variance,
+        amplitude) * Number of velocity components
+
+    mu_pvf : float, default=-1e4
+        mean of the pvf profile prior
+
+    var_pvf : float, default=1e7
+        var of the pvf profile prior
+
+    blue_fl, red_fl : list
+        normalized flux and uncertainty at the blue/red edge
+
+    Returns
+    -------
+    lnprior : float
+        the log prior probability
+    '''
+
     y1, y2 = theta[:2]
     lnp_y1 = -np.log(blue_fl[1]) - (blue_fl[0] - y1)**2 / 2 / blue_fl[1]**2
     lnp_y2 = -np.log(red_fl[1]) - (red_fl[0] - y2)**2 / 2 / red_fl[1]**2
@@ -443,6 +706,11 @@ def ln_prob(
     blue_fl=[1, .1],
     red_fl=[1, .1],
 ):
+    '''log-posterior probability
+
+    See lnprior() and lnlike_gaussian_abs() for details
+    '''
+
     ln_prior = lnprior(theta, mu_pvf, var_pvf, blue_fl, red_fl)
     ln_like = lnlike_gaussian_abs(theta, blue_vel, red_vel, vel_rf, norm_flux,
                                   delta_vel_components, norm_flux_unc)
@@ -453,7 +721,19 @@ def ln_prob(
 
 
 def plot_MCMC(sampler, nburn, nplot=None):
-    '''plot walker chains and corner plots'''
+    '''plot walker chains and corner plots
+
+    Parameters
+    ----------
+    sampler : emcee EnsembleSampler object
+        emcee affine-invariant multi-chain MCMC sampler
+
+    nburn : int
+        number of "burn-in" steps for the MCMC chains
+
+    nplot : int, default=None
+        number of chains to show in the visualization.
+    '''
 
     ndim = sampler.get_chain().shape[2]
     if ndim == 5:
@@ -492,10 +772,10 @@ def plotChains(sampler, nburn, paramsNames, nplot=None):
     nburn : int
         number of "burn-in" steps for the MCMC chains
 
-    paramsNames : list
+    paramsNames : array_like
         names of the parameters to be shown
 
-    nplot : int (default=None)
+    nplot : int, default=None
         number of chains to show in the visualization.
         In instances where the number of chains is
         very large (>> 100), then it can be helpful to
