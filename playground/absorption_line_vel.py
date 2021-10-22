@@ -13,7 +13,8 @@ mpl.rcParams['xtick.labelsize'] = '20'
 mpl.rcParams['ytick.labelsize'] = '20'
 
 import warnings
-
+import glob
+import os
 
 ##################### SpectrumSN class ##########################
 
@@ -23,6 +24,10 @@ class SpectrumSN(object):
 
     Attributes
     ----------
+    spec_name : str
+        spectrum name based on the filename
+        source name + date + instrument
+
     fl : array_like
         flux (in arbitrary units)
 
@@ -42,7 +47,7 @@ class SpectrumSN(object):
         pget the flux and its uncertainty at some given wavelength
     '''
 
-    def __init__(self, spec1D, z=0):
+    def __init__(self, spec1D, z=0, SN_name='ZTF'):
         '''Constructor
 
         Parameters
@@ -52,6 +57,9 @@ class SpectrumSN(object):
 
         z : float (default=0)
             host galaxy redshift
+
+        SN_name : str, default='ZTF'
+            SN naming system (appeared in the datafile)
         '''
 
         spec_df = pd.read_csv(spec1D,
@@ -63,6 +71,9 @@ class SpectrumSN(object):
         wv_rf = wv / (1 + z)
         fl = spec_df[1].values
 
+        self.spec_name = spec1D[spec1D.find(
+            SN_name):spec1D.find('.ascii')]
+
         try:
             if 'Keck' in spec1D:
                 fl_unc = spec_df[3].values
@@ -71,14 +82,10 @@ class SpectrumSN(object):
 
                 if 'P60' in spec1D:
                     fl_unc **= .5
-
-            rel_unc = fl_unc / fl
-            rel_unc[rel_unc < 1e-3] = np.median(rel_unc[rel_unc > 1e-3])
-            fl_unc = rel_unc * fl
         except:
             warnings.warn("No flux uncertainty in the datafile!")
-            # set relative uncertainty to be 1%
-            fl_unc = np.ones_like(fl) * 1e-2 * np.median(fl)
+            # set relative uncertainty to be 10%
+            fl_unc = np.ones_like(fl) * 1e-1 * np.median(fl)
 
         # make sure flux measurements are positive
         self.fl = fl[fl > 0]
@@ -149,8 +156,6 @@ class SpectrumSN(object):
 class SpectrumSN_Lines(SpectrumSN):
     '''A set of measurements on different absorption lines
 
-    Children class of SpectrumSN
-
     Attributes
     ----------
     Spec1D : str
@@ -158,10 +163,6 @@ class SpectrumSN_Lines(SpectrumSN):
 
     z : float
         host galaxy redshift
-
-    spec_name : str
-        spectrum name based on the filename
-        source name + date + instrument
 
     line : dict
         a dictionary of various lines (AbsorbLine objects)
@@ -180,13 +181,14 @@ class SpectrumSN_Lines(SpectrumSN):
         spec1D : str
             the spectrum file (directory + filename)
 
-        z : float (default=0)
+        z : float, default=0
             host galaxy redshift
         '''
+
         super(SpectrumSN_Lines, self).__init__(spec1D, z)
+
         self.spec1D = spec1D
         self.z = z
-        self.spec_name = spec1D[spec1D.find('ZTF'):spec1D.find('.ascii')]
         self.line = {}
 
     def add_line(self, name, blue_edge, red_edge, lines=[]):
@@ -207,6 +209,7 @@ class SpectrumSN_Lines(SpectrumSN):
             the central wavelength(s) [angstrom] of this 
             (series) of line(s)
         '''
+
         self.line[name] = AbsorbLine(
             self.spec1D, self.z, blue_edge, red_edge, lines)
 
@@ -216,6 +219,10 @@ class AbsorbLine(SpectrumSN):
 
     Attributes
     ----------
+    spec_name : str
+        spectrum name based on the filename
+        source name + date + instrument
+
     wv_line : array_like
         the wavelength range [angstrom] of the line 
         (host galaxy frame)
@@ -265,7 +272,7 @@ class AbsorbLine(SpectrumSN):
 
     MCMC_sampler(mu_pvf=-1e4, var_pvf=1e7,
                  nwalkers=100, nsteps=1500, 
-                 nburn=500, initial=[],
+                 nburn=-1, initial=[],
                  normalize_unc=False) :
         An MCMC sampler
 
@@ -284,7 +291,7 @@ class AbsorbLine(SpectrumSN):
         spec1D: str
             the spectrum file (directory + filename)
 
-        z: float (default=0)
+        z: float, default=0
             host galaxy redshift
 
         blue_edge, red_edge: float
@@ -308,7 +315,16 @@ class AbsorbLine(SpectrumSN):
         norm_fl = self.fl / np.nanmedian(self.fl)
         norm_fl_unc = self.fl_unc / np.nanmedian(self.fl)
         self.norm_fl = norm_fl[line_region]
-        self.norm_fl_unc = norm_fl_unc[line_region]
+
+        # check if there are points with relative uncertainty
+        # two orders of magnitude lower than the median
+        norm_fl_unc = norm_fl_unc[line_region]
+        rel_unc = norm_fl_unc / self.norm_fl
+        med_rel_unc = np.nanmedian(rel_unc)
+        if rel_unc.min() < med_rel_unc / 1e2:
+            warnings.warn("Some flux with extremely low uncertainty!")
+        rel_unc[rel_unc < med_rel_unc / 1e2] = med_rel_unc
+        self.norm_fl_unc = rel_unc * self.norm_fl
 
         # flux at each edge
         blue_fl = super(AbsorbLine, self).get_flux_at_lambda(blue_edge)
@@ -368,8 +384,11 @@ class AbsorbLine(SpectrumSN):
 
     def MCMC_sampler(self,
                      mu_pvf=-1e4, var_pvf=1e7,
-                     nwalkers=100, nsteps=1500, nburn=500, initial=[],
-                     normalize_unc=False):
+                     nwalkers=100, max_nsteps=50000, nburn=500, initial=[],
+                     normalize_unc=False,
+                     Plot_model=True,
+                     Plot_mcmc=False,
+                     Plot_tau=False):
         '''MCMC sampler
 
         Parameters
@@ -383,18 +402,30 @@ class AbsorbLine(SpectrumSN):
         nwalkers : int, default=100
             number of MCMC sampler walkers
 
-        nsteps : int, default=1500
-            MCMC chain length
+        max_nsteps : int, default=1500
+            maximum MCMC chain length
 
-        nburn : int, default=500
+        nburn : int, default=-1
             number of "burn-in" steps for the MCMC chains
+            if nburn<0, it will be recalculated based on
+            the autocorrelation timescale tau
 
         initial : array_like, default=[]
              initial values for the MCMC sampler
 
         normalize_unc : bool, default=False
-            whether to normalize the flux uncertainty based on the
-            residual of a former LS estimation
+            whether to normalize the flux uncertainty based 
+            on the residual of a former LS estimation
+
+        Plot_model : bool, default=True
+            whether to plot the model v.s. data
+
+        Plot_mcmc : bool, default=False
+            whether to plot the MCMC chains and corner plots
+
+        Plot_tau : bool, default=False
+            whether to plot the evolution of autocorrelation 
+            time tau
 
         Returns
         -------
@@ -410,9 +441,20 @@ class AbsorbLine(SpectrumSN):
         p0 = [i + initial for i in np.random.randn(nwalkers, ndim) * 1e-5]
 
         if normalize_unc:
-            norm_fac = (self.chi2_LS / len(vel_rf))**.5
+            norm_fac = (self.chi2_LS / len(self.vel_rf))**.5
         else:
             norm_fac = 1
+
+        # Saving and monitoring process
+        # https://emcee.readthedocs.io/en/stable/tutorials/monitor/
+        filename = "{}.h5".format(self.spec_name)  # save the chain
+        if filename in glob.glob('./*h5'):
+            os.remove(filename)
+        backend = emcee.backends.HDFBackend(filename)
+        backend.reset(nwalkers, ndim)
+
+        autocorr = np.zeros(max_nsteps)
+        old_tau = np.inf
 
         sampler = emcee.EnsembleSampler(
             nwalkers,
@@ -422,16 +464,51 @@ class AbsorbLine(SpectrumSN):
                   self.delta_vel_components,
                   mu_pvf, var_pvf,
                   self.norm_fl_unc * norm_fac,
-                  self.blue_fl, self.red_fl))
-        sampler.run_mcmc(p0, nsteps, progress=True)
+                  self.blue_fl, self.red_fl),
+            backend=backend)
 
-        self.theta_MCMC = np.median(
-            sampler.chain[:, nburn:, :].reshape((-1, ndim)), axis=0)
-        self.sig_theta_MCMC = (np.percentile(
-            sampler.chain[:, nburn:, :].reshape((-1, ndim)), q=84, axis=0) - np.percentile(
-            sampler.chain[:, nburn:, :].reshape((-1, ndim)), q=16, axis=0)) / 2
+        index = 0
+        for sample in sampler.sample(p0,
+                                     iterations=max_nsteps,
+                                     progress=True):
+            # Only check convergence every 100 steps
+            if sampler.iteration % 100:
+                continue
 
-        self.plot_model(self.theta_LS)
+            # Compute the autocorrelation time so far
+            tau = sampler.get_autocorr_time(tol=0)
+            autocorr[index] = np.mean(tau)
+            index += 1
+
+            # Check convergence
+            converged = np.all(tau * 100 < sampler.iteration)
+            converged &= np.all(np.abs(old_tau - tau) / tau < 0.01)
+            if converged:
+                break
+            old_tau = tau
+
+        if nburn < 0:
+            nburn = int(2 * np.max(tau))
+        thin = int(0.5 * np.max(tau))
+        samples = sampler.get_chain(discard=nburn, flat=True, thin=thin)
+
+        self.theta_MCMC = np.median(samples, axis=0)
+        self.sig_theta_MCMC = (np.percentile(samples, q=84, axis=0)
+                               - np.percentile(samples, q=16, axis=0)) / 2
+        if Plot_model:
+            self.plot_model(self.theta_LS)
+        if Plot_mcmc:
+            plot_MCMC(sampler, nburn, thin)
+        if Plot_tau:
+            n = 100 * np.arange(1, index + 1)
+            y = autocorr[:index]
+            plt.figure(figsize=(10, 10))
+            plt.plot(n, n / 100.0, "--k")
+            plt.plot(n, y)
+            plt.xlim(0, n.max())
+            plt.ylim(0, y.max() + 0.1 * (y.max() - y.min()))
+            plt.xlabel(r"$\mathrm{Number\ of steps}$")
+            plt.ylabel(r"$\mathrm{Mean}\ \hat{\tau}$")
 
         print('MCMC results:')
         if ndim == 5:
@@ -460,9 +537,9 @@ class AbsorbLine(SpectrumSN):
         model_flux = flux_gauss(theta,
                                 self.blue_vel, self.red_vel,
                                 self.vel_rf, self.delta_vel_components)
-        plt.plot(self.vel_rf, self.norm_fl)
-        plt.errorbar(self.vel_rf, model_flux,
-                     yerr=self.norm_fl_unc, alpha=0.5, linewidth=5, elinewidth=.5)
+        plt.errorbar(self.vel_rf, self.norm_fl,
+                     yerr=self.norm_fl_unc, alpha=0.5, elinewidth=.5)
+        plt.plot(self.vel_rf, model_flux, linewidth=5)
         plt.plot(self.vel_rf, model_flux - self.norm_fl, color='grey')
 
         if len(theta) == 8:
@@ -667,7 +744,7 @@ def lnprior(
     if len(theta[2:]) == 3:
         mean_vel, lnvar, amplitude = theta[2:]
         var_vel = np.exp(lnvar)
-        if (-40000 < mean_vel < 0 and 100 < var_vel**0.5 < 22000
+        if (-4e4 < mean_vel < 0 and 100 < var_vel**0.5 < 22000
                 and -1e5 < amplitude < 0):
             return lnp_y1 + lnp_y2
             # lnflat = 0  #-np.log(40000 * (22000 - 100) * 1e5)
@@ -720,7 +797,7 @@ def ln_prob(
 ######################### MCMC visualization ##############################
 
 
-def plot_MCMC(sampler, nburn, nplot=None):
+def plot_MCMC(sampler, nburn, thin=1, nplot=None):
     '''plot walker chains and corner plots
 
     Parameters
@@ -731,8 +808,11 @@ def plot_MCMC(sampler, nburn, nplot=None):
     nburn : int
         number of "burn-in" steps for the MCMC chains
 
+    thin : int, default=1
+        take only every thin steps from the chain
+
     nplot : int, default=None
-        number of chains to show in the visualization.
+        number of chains to show in the visualization
     '''
 
     ndim = sampler.get_chain().shape[2]
@@ -750,11 +830,11 @@ def plot_MCMC(sampler, nburn, nplot=None):
     else:
         print('Error: wrong parameter number!')
 
-    plotChains(sampler, 0, paramsNames, nplot)
+    plotChains(sampler, nburn, paramsNames, nplot)
     plt.tight_layout()
     plt.show()
 
-    samples = sampler.chain[:, nburn:, :].reshape((-1, ndim))
+    samples = sampler.get_chain(discard=nburn, flat=True, thin=thin)
     fig = corner.corner(samples,
                         labels=paramsNames,
                         quantiles=[0.16, 0.50, 0.84],
