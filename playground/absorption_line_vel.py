@@ -373,18 +373,16 @@ class AbsorbLine(SpectrumSN):
         # print(self.theta_LS)
         ndim = len(self.theta_LS)
         print('LS estimation:')
-        if ndim == 5:
-            print('Velocity pvf: {:.0f} km/s'.format(
-                self.theta_LS[2]))
-        elif ndim == 8:
-            print('Velocity pvf: {:.0f} km/s'.format(
-                self.theta_LS[2]))
+        print('Velocity pvf: {:.0f} km/s'.format(
+            self.theta_LS[2]))
+        if ndim == 8:  # ndim == 8 means we have hvf measurements
             print('Velocity hvf: {:.0f} km/s'.format(
                 self.theta_LS[5]))
 
     def MCMC_sampler(self,
                      mu_pvf=-1e4, var_pvf=1e7,
-                     nwalkers=100, max_nsteps=50000, nburn=500, initial=[],
+                     nwalkers=100, max_nsteps=50000,
+                     nburn=-1, thin=-1, initial=[],
                      normalize_unc=False,
                      Plot_model=True,
                      Plot_mcmc=False,
@@ -402,12 +400,17 @@ class AbsorbLine(SpectrumSN):
         nwalkers : int, default=100
             number of MCMC sampler walkers
 
-        max_nsteps : int, default=1500
+        max_nsteps : int, default=50000
             maximum MCMC chain length
 
         nburn : int, default=-1
             number of "burn-in" steps for the MCMC chains
             if nburn<0, it will be recalculated based on
+            the autocorrelation timescale tau
+
+        thin : int, default=-1
+            yield every 'thin' samples in the chain
+            if nthin<0, it will be recalculated based on
             the autocorrelation timescale tau
 
         initial : array_like, default=[]
@@ -472,7 +475,7 @@ class AbsorbLine(SpectrumSN):
                                      iterations=max_nsteps,
                                      progress=True):
             # Only check convergence every 100 steps
-            if sampler.iteration % 100:
+            if sampler.iteration % 50:
                 continue
 
             # Compute the autocorrelation time so far
@@ -481,7 +484,7 @@ class AbsorbLine(SpectrumSN):
             index += 1
 
             # Check convergence
-            converged = np.all(tau * 100 < sampler.iteration)
+            converged = np.all(tau * 50 < sampler.iteration)
             converged &= np.all(np.abs(old_tau - tau) / tau < 0.01)
             if converged:
                 break
@@ -489,36 +492,70 @@ class AbsorbLine(SpectrumSN):
 
         if nburn < 0:
             nburn = int(2 * np.max(tau))
-        thin = int(0.5 * np.max(tau))
+        if thin < 0:
+            thin = max(int(0.5 * np.max(tau)), 1)
         samples = sampler.get_chain(discard=nburn, flat=True, thin=thin)
 
-        self.theta_MCMC = np.median(samples, axis=0)
-        self.sig_theta_MCMC = (np.percentile(samples, q=84, axis=0)
-                               - np.percentile(samples, q=16, axis=0)) / 2
+        # Median as the estimator
+        #self.theta_MCMC = np.median(samples, axis=0)
+        # self.sig_theta_MCMC = (np.percentile(samples, q=84, axis=0)
+        #- np.percentile(samples, q=16, axis=0)) / 2
+
+        # Mode as the estimator
+        # 68% credible region for the highest density
+        self.theta_MCMC = []
+        self.sig_theta_MCMC = []
+        for i in range(ndim):
+            hist, bin_edges = np.histogram(
+                samples[:, i], bins=50, density=True)
+            bins = (bin_edges[1:] + bin_edges[:-1]) / 2
+            width = bin_edges[1] - bin_edges[0]
+            arg = np.argsort(hist)
+            self.theta_MCMC.append(bins[arg][-1])
+
+            cred = 0.68  # credible region
+            dens_thres = np.inf
+            j = 0
+            while cred > 0:
+                cred -= width * hist[arg[-1 - j]]
+                dens_thres = hist[arg][-1 - j]
+                j += 1
+            interval = bins[hist > dens_thres]
+            self.sig_theta_MCMC.append((interval[-1] - interval[0]) / 2)
+
+            # If the posteriors are asymmetric
+            # self.sig_theta_MCMC.append(
+            #    [bins[arg][-1] - interval[0], interval[-1] - bins[arg][-1]])
+
+        print('MCMC results:')
+        print('Velocity pvf: {:.0f} pm {:.0f} km/s'.format(
+            self.theta_MCMC[2], self.sig_theta_MCMC[2]))
+        if ndim == 8:
+            print('Velocity hvf: {:.0f} pm {:.0f} km/s'.format(
+                self.theta_MCMC[5], self.sig_theta_MCMC[5]))
+
+        # If the posteriors are asymmetric
+        # print('Velocity pvf: {:.0f} plus {:.0f} minus {:.0f} km/s'.format(
+        #    self.theta_MCMC[2], self.sig_theta_MCMC[2][0], self.sig_theta_MCMC[2][1]))
+        # if ndim == 8:
+        #    print('Velocity hvf: {:.0f} plus {:.0f} minus {:.0f} km/s'.format(
+        #        self.theta_MCMC[5], self.sig_theta_MCMC[5][0], self.sig_theta_MCMC[5][1]))
+
         if Plot_model:
-            self.plot_model(self.theta_LS)
+            self.plot_model(self.theta_MCMC)
         if Plot_mcmc:
-            plot_MCMC(sampler, nburn, thin)
+            plot_MCMC(sampler, nburn, thin, nplot=20)
         if Plot_tau:
-            n = 100 * np.arange(1, index + 1)
+            n = 50 * np.arange(1, index + 1)
             y = autocorr[:index]
             plt.figure(figsize=(10, 10))
-            plt.plot(n, n / 100.0, "--k")
+            plt.plot(n, n / 50.0, "--k")
             plt.plot(n, y)
             plt.xlim(0, n.max())
             plt.ylim(0, y.max() + 0.1 * (y.max() - y.min()))
             plt.xlabel(r"$\mathrm{Number\ of steps}$")
             plt.ylabel(r"$\mathrm{Mean}\ \hat{\tau}$")
-
-        print('MCMC results:')
-        if ndim == 5:
-            print('Velocity pvf: {:.0f} pm {:.0f} km/s'.format(
-                self.theta_MCMC[2], self.sig_theta_MCMC[2]))
-        elif ndim == 8:
-            print('Velocity pvf: {:.0f} pm {:.0f} km/s'.format(
-                self.theta_MCMC[2], self.sig_theta_MCMC[2]))
-            print('Velocity hvf: {:.0f} pm {:.0f} km/s'.format(
-                self.theta_MCMC[5], self.sig_theta_MCMC[5]))
+            plt.show()
 
         return sampler
 
@@ -841,7 +878,7 @@ def plot_MCMC(sampler, nburn, thin=1, nplot=None):
                         show_titles=True)
 
 
-def plotChains(sampler, nburn, paramsNames, nplot=None):
+def plotChains(sampler, nburn, paramsNames, thin=1, nplot=None):
     '''Plot individual chains from the emcee MCMC sampler
 
     Parameters
@@ -854,6 +891,9 @@ def plotChains(sampler, nburn, paramsNames, nplot=None):
 
     paramsNames : array_like
         names of the parameters to be shown
+
+    thin : int, default=1
+        yield every 'thin' samples in plotting the chain
 
     nplot : int, default=None
         number of chains to show in the visualization.
@@ -870,7 +910,7 @@ def plotChains(sampler, nburn, paramsNames, nplot=None):
     '''
 
     Nparams = len(paramsNames)
-    nwalkers = sampler.get_chain().shape[1]
+    nwalkers = sampler.get_chain(thin=thin).shape[1]
 
     fig, ax = plt.subplots(Nparams + 1,
                            1,
@@ -878,20 +918,21 @@ def plotChains(sampler, nburn, paramsNames, nplot=None):
                            sharex=True)
     fig.subplots_adjust(hspace=0)
     ax[0].set_title(r'$\mathrm{Chains}$')
-    xplot = np.arange(sampler.get_chain().shape[0])
+    xplot = np.arange(sampler.get_chain(thin=thin).shape[0]) * thin
 
     if nplot is None:
         nplot = nwalkers
     selected_walkers = np.random.choice(range(nwalkers), nplot, replace=False)
     for i, p in enumerate(paramsNames):
         for w in selected_walkers:
-            burn = ax[i].plot(xplot[:nburn],
-                              sampler.get_chain()[:nburn, w, i],
-                              alpha=0.4,
-                              lw=0.7,
-                              zorder=1)
-            ax[i].plot(xplot[nburn:],
-                       sampler.get_chain(discard=nburn)[:, w, i],
+            burn = ax[i].plot(xplot[:nburn // thin],
+                              sampler.get_chain(thin=thin)[
+                :nburn // thin, w, i],
+                alpha=0.4,
+                lw=0.7,
+                zorder=1)
+            ax[i].plot(xplot[nburn // thin - 1:],
+                       sampler.get_chain(thin=thin)[nburn // thin - 1:, w, i],
                        color=burn[0].get_color(),
                        alpha=0.8,
                        lw=0.7,
@@ -899,14 +940,16 @@ def plotChains(sampler, nburn, paramsNames, nplot=None):
 
             ax[i].set_ylabel(p)
             if i == Nparams - 1:
-                ax[i + 1].plot(xplot[:nburn],
-                               sampler.get_log_prob()[:nburn, w],
-                               color=burn[0].get_color(),
-                               alpha=0.4,
-                               lw=0.7,
-                               zorder=1)
-                ax[i + 1].plot(xplot[nburn:],
-                               sampler.get_log_prob(discard=nburn)[:, w],
+                ax[i + 1].plot(xplot[:nburn // thin],
+                               sampler.get_log_prob(thin=thin)[
+                    :nburn // thin, w],
+                    color=burn[0].get_color(),
+                    alpha=0.4,
+                    lw=0.7,
+                    zorder=1)
+                ax[i + 1].plot(xplot[nburn // thin - 1:],
+                               sampler.get_log_prob(
+                                   thin=thin)[nburn // thin - 1:, w],
                                color=burn[0].get_color(),
                                alpha=0.8,
                                lw=0.7,
