@@ -494,7 +494,7 @@ class AbsorbLine(SpectrumSN):
             nburn = int(2 * np.max(tau))
         if thin < 0:
             thin = max(int(0.5 * np.max(tau)), 1)
-        samples = sampler.get_chain(discard=nburn, flat=True, thin=thin)
+        samples = sampler.get_chain(discard=nburn, flat=True)
 
         # Median as the estimator
         #self.theta_MCMC = np.median(samples, axis=0)
