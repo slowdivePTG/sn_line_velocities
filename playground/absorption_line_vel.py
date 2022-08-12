@@ -311,11 +311,29 @@ class AbsorbLine(SpectrumSN):
     LS_estimator(guess=(1, 1, -10000, 15, -1000)) :
         Least square point estimation
 
-    MCMC_sampler(mu_pvf=-1e4, var_pvf=1e7,
-                 nwalkers=100, nsteps=1500, 
-                 nburn=-1, initial=[],
-                 normalize_unc=False) :
-        An MCMC sampler
+    MCMC_sampler(vel_mean_mu=[], vel_mean_sig=[],
+                 vel_var_lim=[2e1, 1e8],
+                 A_lim=[-1e5, 1e5],
+                 sampler='NUTS',
+                 nburn=2000,
+                 target_accept=0.8,
+                 initial=[],
+                 Plot_structure=False,
+                 Plot_model=True,
+                 Plot_mcmc=False,
+                 Plot_tau=False) :
+        An NUTS sampler based on the package pymc
+
+    MCMC_emcee_sampler(mu_prior=[], var_prior=[],
+                       vel_flat=[-1e5, 0],
+                       var_max=1e8,
+                       nwalkers=100, max_nsteps=50000,
+                       nburn=-1, thin=-1, initial=[],
+                       normalize_unc='None',
+                       Plot_model=True,
+                       Plot_mcmc=False,
+                       Plot_tau=False) :
+        An Metropolis-Hastings sampler based on the package emcee
 
     plot_model(theta) :
         Plot the predicted absorption features
@@ -469,17 +487,18 @@ class AbsorbLine(SpectrumSN):
             print('Velocity {}: {:.0f} km/s'.format(k +
                   1, self.theta_LS[2 + 3 * k]))
 
-    def MCMC_NUTS_sampler(self,
-                          vel_mean_mu=[], vel_mean_sig=[],
-                          vel_var_lim=[2e1, 1e8],
-                          A_lim=[-1e5, 1e5],
-                          nburn=2000,
-                          target_accept=0.8,
-                          initial=[],
-                          Plot_structure=False,
-                          Plot_model=True,
-                          Plot_mcmc=False,
-                          Plot_tau=False):
+    def MCMC_sampler(self,
+                     vel_mean_mu=[], vel_mean_sig=[],
+                     vel_var_lim=[2e1, 1e8],
+                     A_lim=[-1e5, 1e5],
+                     sampler='NUTS',
+                     nburn=2000,
+                     target_accept=0.8,
+                     initial=[],
+                     Plot_structure=False,
+                     Plot_model=True,
+                     Plot_mcmc=False,
+                     Plot_tau=False):
         '''MCMC sampler with pymc
 
         Parameters
@@ -496,6 +515,11 @@ class AbsorbLine(SpectrumSN):
 
         A_lim : float, default=[-1e5, 1e5]
             allowed range of the amplitude
+
+        sampler : ['NUTS', 'MH'], default='NUTS'
+            A step function or collection of functions
+            'NUTS' : The No-U-Turn Sampler
+            'MH' : Metropolis–Hastings Sampler
 
         nburn : int, default=2000
             number of "burn-in" steps for the MCMC chains
@@ -574,7 +598,7 @@ class AbsorbLine(SpectrumSN):
                 # equivalent width
                 EW_k = pm.Deterministic(f'EW_{k}', -A[k] /
                                         (self.red_vel - self.blue_vel) /
-                                        ((self.red_fl[0] + self.blue_fl[0]) / 2) *
+                                        ((fl1 + fl2) / 2) *
                                         (self.wv_line[-1] - self.wv_line[0]) *
                                         (pm.math.sum(rel_strength[k]) + 1))
 
@@ -611,10 +635,16 @@ class AbsorbLine(SpectrumSN):
                 start[f'log_ratio_{k}'] = np.log10(self.rel_strength[k])
 
         with GaussProfile:
-            trace = pm.sample(return_inferencedata=True,
-                              initvals=start,
-                              target_accept=target_accept,
-                              tune=nburn)
+            if sampler == 'NUTS':
+                trace = pm.sample(return_inferencedata=True,
+                                  initvals=start,
+                                  target_accept=target_accept,
+                                  tune=nburn)
+            elif sampler == 'MH':
+                trace = pm.sample(return_inferencedata=True,
+                                  initvals=start,
+                                  step=pm.Metropolis(),
+                                  tune=nburn)
 
         var_names_summary = ["v_mean", "v_sig", "A", "sigma_0"]
         for k in ratio_index:
@@ -645,18 +675,18 @@ class AbsorbLine(SpectrumSN):
 
         return trace, GaussProfile
 
-    def MCMC_sampler(self,
-                     mu_prior=[], var_prior=[],
-                     vel_flat=[-1e5, 0],
-                     var_max=1e8,
-                     nwalkers=100, max_nsteps=50000,
-                     nburn=-1, thin=-1, initial=[],
-                     normalize_unc='None',
-                     Plot_model=True,
-                     Plot_mcmc=False,
-                     Plot_tau=False):
+    def MCMC_emcee_sampler(self,
+                           mu_prior=[], var_prior=[],
+                           vel_flat=[-1e5, 0],
+                           var_max=1e8,
+                           nwalkers=100, max_nsteps=50000,
+                           nburn=-1, thin=-1, initial=[],
+                           normalize_unc='None',
+                           Plot_model=True,
+                           Plot_mcmc=False,
+                           Plot_tau=False):
         from warnings import warn
-        warn('The function MCMC_sampler() is deprecated. Use MCMC_NUTS_sampler() instead',
+        warn('The function MCMC_emcee_sampler() is deprecated. Use MCMC_sampler() instead',
              DeprecationWarning, stacklevel=2)
         '''MCMC sampler with emcee
 
@@ -852,8 +882,9 @@ class AbsorbLine(SpectrumSN):
         self.EW = 0
         self.sig_EW = 0
         for k, rs in enumerate(self.rel_strength):
-            ratio = 2 / (self.red_vel - self.blue_vel) * \
-                (self.wv_line[-1] - self.wv_line[0]) * (np.sum(rs) + 1)
+            ratio = (np.sum(rs) + 1) / (self.red_vel - self.blue_vel) / \
+                ((self.red_fl[0] + self.blue_fl[0]) / 2) * \
+                (self.wv_line[-1] - self.wv_line[0])
             self.EW += self.theta_MCMC[4 + 3 * k] * -ratio
             self.sig_EW += self.sig_theta_MCMC[4 + 3 * k] * ratio
 
