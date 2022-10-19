@@ -8,7 +8,6 @@ import pandas as pd
 from numpy.linalg import norm
 import numpy as np
 import warnings
-import glob
 from dust_extinction import calALambda
 from logging import raiseExceptions
 import sys
