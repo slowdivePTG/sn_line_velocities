@@ -17,5 +17,5 @@ conda activate MY_ENV
 In the previous version, the posteriors are sampled using `emcee`, which will be deprecated soon. The default sampler is the No-U-Turn sampler embedded in `pymc`.
 
 ## Get Started
-See the notebook `broad_absorption.ipynb` in the `playground/` folder.
+See the notebook `broad_absorption.ipynb`.
 
