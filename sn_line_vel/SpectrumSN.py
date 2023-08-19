@@ -164,9 +164,9 @@ class SpectrumSN(object):
         """
         line_region = np.where((self.wv_rf < red_edge) & (self.wv_rf > blue_edge))[0]
 
-        plt.figure(figsize=(8, 6))
-        plt.plot(self.wv_rf[line_region], self.fl[line_region], color="0.5", lw=2)
-        plt.errorbar(
+        _, ax = plt.subplots(figsize=(8, 6), constrained_layout=True)
+        ax.plot(self.wv_rf[line_region], self.fl[line_region], color="0.5", lw=2)
+        ax.errorbar(
             self.wv_rf[line_region],
             self.fl[line_region],
             yerr=self.fl_unc[line_region],
@@ -174,5 +174,6 @@ class SpectrumSN(object):
             capsize=2,
             elinewidth=1,
         )
-        plt.tight_layout()
-        return plt.gca()
+        ax.set_xlabel(r"$\mathrm{Wavelength}\ [\mathrm{\r{A}}]$")
+        ax.set_ylabel(r"$\mathrm{Flux}$")
+        return ax

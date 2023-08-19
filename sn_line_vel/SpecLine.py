@@ -506,8 +506,10 @@ class SpecLine(object):
         self.theta_MCMC = theta
 
         if plot_mcmc:
-            # by default, show the mean velocity, velocity dispersion, and line ratios
-            var_names_plot = ["v_mean", "v_sig", "A"]
+            # by default, show the mean velocity, velocity dispersion, pseudo-EW, and line ratios
+            var_names_plot = ["v_mean", "v_sig"]
+            for k in range(n_lines):
+                var_names_plot.append(f"EW_{k}")
             for k in ratio_index:
                 var_names_plot.append(f"ratio_{k}")
             corner.corner(trace, var_names=var_names_plot)
@@ -537,7 +539,7 @@ class SpecLine(object):
         """
 
         if ax == None:
-            _, ax = plt.subplots(figsize=(10, 10), constrained_layout=True)
+            _, ax = plt.subplots(figsize=(8, 8), constrained_layout=True)
         # ensure high resolution in predicted model
         if len(self.vel_rf) < 200:
             vel_rf = np.linspace(self.vel_rf[0], self.vel_rf[-1], 200)
@@ -582,20 +584,36 @@ class SpecLine(object):
             - self.norm_fl
         )
         ax.errorbar(
-            self.vel_rf, self.norm_fl, yerr=self.norm_fl_unc, alpha=0.5, elinewidth=0.5
+            self.vel_rf,
+            self.norm_fl,
+            yerr=self.norm_fl_unc,
+            alpha=0.5,
+            elinewidth=0.5,
+            marker="o",
+            zorder=-100,
         )
-        model_plot = plt.plot(vel_rf, model_flux, linewidth=5)
+        model_plot = plt.plot(vel_rf, model_flux, linewidth=5, color="k")
         ax.errorbar(
             [self.vel_rf[0], self.vel_rf[-1]],
             [model_flux[0], model_flux[-1]],
             yerr=[self.blue_fl[1], self.red_fl[1]],
             color=model_plot[0].get_color(),
-            fmt="o",
+            fmt="s",
+            markerfacecolor="w",
             capsize=5,
         )
         ax.plot(self.vel_rf, model_res, color="grey")
 
         if len(rel_strength) > 1:
+            colors = [
+                "#66c2a5",
+                "#fc8d62",
+                "#8da0cb",
+                "#e78ac3",
+                "#a6d854",
+                "#ffd92f",
+                "#e5c494",
+            ]
             for k in range(len(rel_strength)):
                 model_flux = calc_model_flux(
                     np.append(theta0[:2], theta0[2 + 3 * k : 5 + 3 * k]),
@@ -607,7 +625,14 @@ class SpecLine(object):
                     self.vel_rf,
                     [self.lines[k]],
                 )
-                plt.plot(self.vel_rf, model_flux, color="k", alpha=0.4, linewidth=3)
+                ax.plot(
+                    self.vel_rf,
+                    model_flux,
+                    linewidth=2,
+                    label=f"line_{k}",
+                    color=colors[k % len(colors)],
+                )
+            ax.legend()
 
         ax.set_xlabel(r"$v\ [\mathrm{km/s}]$")
         ax.set_ylabel(r"$\mathrm{Normalized\ Flux}$")
@@ -714,9 +739,7 @@ def lnlike_gaussian_abs(theta, spec_line):
         -0.5 * len(model_flux) * np.log(2 * np.pi)
         - np.sum(np.log(spec_line.norm_fl_unc))
         - 0.5
-        * np.sum(
-            (spec_line.norm_fl - model_flux) ** 2 / spec_line.norm_fl_unc**2
-        )
+        * np.sum((spec_line.norm_fl - model_flux) ** 2 / spec_line.norm_fl_unc**2)
     )
 
     return lnl
