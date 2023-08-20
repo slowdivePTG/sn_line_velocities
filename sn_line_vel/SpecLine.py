@@ -290,6 +290,7 @@ class SpecLine(object):
         nburn=2000,
         target_accept=0.8,
         initial=[],
+        find_MAP=False,
         plot_structure=False,
         plot_model=True,
         plot_mcmc=False,
@@ -330,6 +331,9 @@ class SpecLine(object):
 
         initial : array_like, default=[]
              initial values for the MCMC sampler
+
+        find_MAP : bool, default=False
+             whether to find the local maximum a posteriori point given a model
 
         plot_model : bool, default=True
             whether to plot the model v.s. data
@@ -505,6 +509,21 @@ class SpecLine(object):
             self.sig_EW.append(all["sd"][f"EW_{k}"])
         self.theta_MCMC = theta
 
+        if find_MAP:
+            neg_log_posterior = -np.array(trace.sample_stats.lp)
+            ind = np.unravel_index(
+                np.argmin(neg_log_posterior, axis=None), neg_log_posterior.shape
+            )
+            theta_MAP = [
+                np.array(trace.posterior["blue_fl"])[ind],
+                np.array(trace.posterior["red_fl"])[ind],
+            ]
+            for k in range(n_lines):
+                theta_MAP.append(np.array(trace.posterior[f"v_mean"])[ind][k])
+                theta_MAP.append(np.array(trace.posterior[f"ln_v_sig"])[ind][k])
+                theta_MAP.append(np.array(trace.posterior[f"A"])[ind][k])
+            self.theta_MAP = theta_MAP
+
         if plot_mcmc:
             # by default, show the mean velocity, velocity dispersion, pseudo-EW, and line ratios
             var_names_plot = ["v_mean", "v_sig"]
@@ -515,7 +534,13 @@ class SpecLine(object):
             corner.corner(trace, var_names=var_names_plot)
 
         if plot_model:
-            ax = self.plot_model(self.theta_MCMC, return_ax=True)
+            if find_MAP:
+                warnings.warn("The model from the MAP estimators are shown.")
+                warnings.warn("The corresponding parameters:")
+                print(self.theta_MAP)
+                ax = self.plot_model(self.theta_MAP, return_ax=True)
+            else:
+                ax = self.plot_model(self.theta_MCMC, return_ax=True)
             return trace, GaussProfile, ax
         else:
             return trace, GaussProfile
