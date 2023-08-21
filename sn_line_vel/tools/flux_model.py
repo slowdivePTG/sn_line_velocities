@@ -133,7 +133,7 @@ def calc_model_flux(
         # the spectral resolution of the spectrograph limits the line width
         sig_instru = (sig_vel**2 + vel_resolution**2) ** 0.5
 
-        for rel_s, li in zip(rel_strength[k], lines[k][:-1]):
+        for rel_s, li in zip(rel_strength[k], lines[k]):
             vel = velocity_rf_line(li, lambda_0, mean_vel)
             if model == "Gauss":
                 calc = calc_gauss
@@ -142,6 +142,4 @@ def calc_model_flux(
             else:
                 raise NameError("Line model not supported (optional: Gauss & Lorentz)")
             model_flux += rel_s * calc(vel, sig_instru, amplitude, vel_rf)
-        vel = velocity_rf_line(lines[k][-1], lambda_0, mean_vel)
-        model_flux += calc_gauss(vel, sig_instru, amplitude, vel_rf)
     return model_flux

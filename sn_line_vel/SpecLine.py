@@ -196,12 +196,6 @@ class SpecLine(object):
         except:
             lines = np.atleast_2d(lines)
             rel_strength = np.atleast_2d(rel_strength)
-        lambda_0 = np.max(lines[0][np.argmax(rel_strength[0])])
-        vel_rf = velocity_rf(self.wv_rf, lambda_0)
-        self.vel_rf = vel_rf[line_region]
-
-        self.blue_vel = velocity_rf(blue_edge, lambda_0)
-        self.red_vel = velocity_rf(red_edge, lambda_0)
 
         self.rel_strength = []
         self.lines = []
@@ -211,19 +205,21 @@ class SpecLine(object):
                 rs = np.ones_like(lines[k])
             else:
                 rs = rel_strength[k]
-            li = np.array(lines[k])[np.argsort(lines[k])]
-            rs = np.array(rs) / rs[np.argmax(lines[k])]
-            rs = np.array(rs)[np.argsort(lines[k])]
+            li = np.array(lines[k])[np.argsort(rs)]
+            rs = np.sort(rs) / np.max(rs)
             self.lines.append(li)
-            self.rel_strength.append(rs[:-1])
-            if k == 0:
-                if len(self.rel_strength[k]) == 0:
-                    self.lambda_0 = lines[k][0]
-                else:
-                    self.lambda_0 = np.max(lines[k][np.argmax(self.rel_strength[k])])
+            self.rel_strength.append(rs)
+
         if len(free_rel_strength) == 0:
             free_rel_strength = np.array([False] * len(self.rel_strength))
         self.free_rel_strength = free_rel_strength
+
+        self.lambda_0 = self.lines[0][-1]
+        vel_rf = velocity_rf(self.wv_rf, self.lambda_0)
+        self.vel_rf = vel_rf[line_region]
+
+        self.blue_vel = velocity_rf(blue_edge, self.lambda_0)
+        self.red_vel = velocity_rf(red_edge, self.lambda_0)
 
         self.vel_resolution = (
             2.99792458e5 * self.spec_resolution / 2.355 / ((blue_edge + red_edge) / 2)
@@ -269,7 +265,7 @@ class SpecLine(object):
         self.EW = 0
         for k, rs in enumerate(self.rel_strength):
             ratio = (
-                (np.sum(rs) + 1)
+                np.sum(rs)
                 / (self.red_vel - self.blue_vel)
                 / ((self.red_fl[0] + self.blue_fl[0]) / 2)
                 * (self.wv_line[-1] - self.wv_line[0])
@@ -279,17 +275,19 @@ class SpecLine(object):
 
     def MCMC_sampler(
         self,
+        initial=[],
         vel_mean_mu=[],
         vel_mean_sig=[],
         vel_mean_diff=[],
         ln_vel_sig_mu=[],
         ln_vel_sig_sig=[],
         ln_vel_sig_diff=[],
+        ln_vel_sig_min=[],
+        ln_vel_sig_max=[],
         A_lim=[-1e5, 1e5],
         sampler="NUTS",
         nburn=2000,
         target_accept=0.8,
-        initial=[],
         find_MAP=False,
         plot_structure=False,
         plot_model=True,
@@ -299,6 +297,9 @@ class SpecLine(object):
 
         Parameters
         ----------
+
+        initial : array_like, default=[]
+             initial values for the MCMC sampler
 
         vel_mean_mu, vel_mean_sig : array_like, default=[]
             means/standard deviations of the velocity priors
@@ -314,6 +315,11 @@ class SpecLine(object):
             standard deviations of the difference between the logarithmic velocity dispersions
             list of tuples - (j, k, ln_v_sig_diff) : Var(ln_v_sig_j - ln_v_sig_k) = ln_v_sig_diff**2
 
+        ln_vel_sig_min, ln_vel_sig_max : array_like, default=[]
+            minimum/maximum logarithmic velocity dispersions
+            if not None, a softplux function will be added the posterior to punish velocity
+            dispersions greater than this value
+
         A_lim : float, default=[-1e5, 1e5]
             allowed range of the amplitude
 
@@ -328,9 +334,6 @@ class SpecLine(object):
         target_accept : float in [0, 1], default=0.8
              the step size is tuned such that we approximate this acceptance rate
              higher values like 0.9 or 0.95 often work better for problematic posteriors
-
-        initial : array_like, default=[]
-             initial values for the MCMC sampler
 
         find_MAP : bool, default=False
              whether to find the local maximum a posteriori point given a model
@@ -389,6 +392,18 @@ class SpecLine(object):
                     mu=ln_vel_sig_mu,
                     cov=ln_vel_sig_cov,
                 )
+                if len(ln_vel_sig_min) == len(ln_vel_sig_mu):
+                    print("There is a vel_sig_min lim...")
+                    pm.Potential(
+                        "vel_sig_min_lim",
+                        -pm.math.log1pexp(-(ln_v_sig - ln_vel_sig_min) * 5**2),
+                    )
+                if len(ln_vel_sig_max) == len(ln_vel_sig_mu):
+                    print("There is a vel_sig_max lim...")
+                    pm.Potential(
+                        "vel_sig_max_lim",
+                        -pm.math.log1pexp((ln_v_sig - ln_vel_sig_max) * 5**2),
+                    )
             else:
                 raise IndexError(
                     "The number of the velocity priors does not match the number of lines"
@@ -420,7 +435,7 @@ class SpecLine(object):
                     / (self.red_vel - self.blue_vel)
                     / ((fl1 + fl2) / 2)
                     * (self.wv_line[-1] - self.wv_line[0])
-                    * (pm.math.sum(rel_strength[k]) + 1),
+                    * pm.math.sum(rel_strength[k]),
                 )
 
             # flux expectation
@@ -454,18 +469,18 @@ class SpecLine(object):
 
         # initialization
         if len(initial) == 0:
-            initial = self.theta_LS
-
-        start = {}
-        start["blue_fl"], start["red_fl"] = self.blue_fl[0], self.red_fl[0]
-        start["v_mean"] = initial[2::3]
-        start["ln_v_sig"] = initial[3::3]
-        start["A"] = initial[4::3]
-        start["sigma_0"] = 1e-3
-        for k, free in enumerate(self.free_rel_strength):
-            if free:
-                start[f"ratio_{k}"] = self.rel_strength[k]
-                start[f"log_ratio_{k}"] = np.log10(self.rel_strength[k])
+            start = None
+        else:
+            start = {}
+            start["blue_fl"], start["red_fl"] = self.blue_fl[0], self.red_fl[0]
+            start["v_mean"] = initial[2::3]
+            start["ln_v_sig"] = initial[3::3]
+            start["A"] = initial[4::3]
+            start["sigma_0"] = 1e-3
+            for k, free in enumerate(self.free_rel_strength):
+                if free:
+                    start[f"ratio_{k}"] = self.rel_strength[k]
+                    start[f"log_ratio_{k}"] = np.log10(self.rel_strength[k])
 
         with GaussProfile:
             if sampler == "NUTS":
@@ -562,6 +577,8 @@ class SpecLine(object):
         ax : matplotlib axes
             if it is not None, plot on it
         """
+
+        print(f"Lambda_0 : {self.lambda_0} Ang")
 
         if ax == None:
             _, ax = plt.subplots(figsize=(8, 8), constrained_layout=True)
