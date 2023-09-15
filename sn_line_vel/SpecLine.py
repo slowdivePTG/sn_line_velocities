@@ -114,6 +114,7 @@ class SpecLine(object):
         bin=False,
         bin_size=1,
         line_model="Gauss",
+        mask=[],
     ):
         """Constructor
 
@@ -149,6 +150,12 @@ class SpecLine(object):
         free_rel_strength : array_like, default=[]
             whether to set the relative strength of each line series as
             another free parameter in MCMC fit
+
+        line_model : string
+            ["Gauss", "Lorentz"]
+
+        mask : array of tuples, default=[]
+            line regions to be masked in the fit
         """
 
         if bin:
@@ -161,25 +168,39 @@ class SpecLine(object):
         self.line_model = line_model
 
         # line region
-        line_region = np.where((self.wv_rf < red_edge) & (self.wv_rf > blue_edge))[0]
+        line_region = (self.wv_rf < red_edge) & (self.wv_rf > blue_edge)
         self.wv_line = self.wv_rf[line_region]
+        # masked line region
+        self.mask = mask
+        line_region_masked = line_region.copy()
+        for mk in mask:
+            line_region_masked &= (self.wv_rf < mk[0]) | (self.wv_rf > mk[1])
+        self.wv_line_masked = self.wv_rf[line_region_masked]
         # print('{:.0f} points within {:.2f} and {:.2f} angstroms.'.format(
         # len(line_region), blue_edge, red_edge))
 
         # normalized flux
         norm_fl = self.fl / np.nanmedian(self.fl)
         norm_fl_unc = self.fl_unc / np.nanmedian(self.fl)
-        self.norm_fl = norm_fl[line_region]
+        self.norm_fl = norm_fl[line_region_masked]
+        self.norm_fl_unmasked = norm_fl[line_region]
 
         # check if there are points with relative uncertainty
         # two orders of magnitude lower than the median
-        norm_fl_unc = norm_fl_unc[line_region]
+        norm_fl_unc = norm_fl_unc[line_region_masked]
         rel_unc = norm_fl_unc / self.norm_fl
         med_rel_unc = np.nanmedian(rel_unc)
         if rel_unc.min() < med_rel_unc / 1e2:
             warnings.warn("Some flux with extremely low uncertainty!")
+            warnings.warn("New uncertainty assigned!")
         rel_unc[rel_unc < med_rel_unc / 1e2] = med_rel_unc
         self.norm_fl_unc = rel_unc * self.norm_fl
+
+        norm_fl = self.fl / np.nanmedian(self.fl)
+        norm_fl_unc = self.fl_unc / np.nanmedian(self.fl)
+        rel_unc = norm_fl_unc[line_region] / self.norm_fl_unmasked
+        med_rel_unc = np.nanmedian(rel_unc)
+        self.norm_fl_unc_unmasked = rel_unc * self.norm_fl_unmasked
 
         # flux at each edge
         range_l = red_edge - blue_edge
@@ -216,7 +237,8 @@ class SpecLine(object):
 
         self.lambda_0 = self.lines[0][-1]
         vel_rf = velocity_rf(self.wv_rf, self.lambda_0)
-        self.vel_rf = vel_rf[line_region]
+        self.vel_rf_unmasked = vel_rf[line_region]
+        self.vel_rf = vel_rf[line_region_masked]
 
         self.blue_vel = velocity_rf(blue_edge, self.lambda_0)
         self.red_vel = velocity_rf(red_edge, self.lambda_0)
@@ -362,9 +384,21 @@ class SpecLine(object):
         with pm.Model() as GaussProfile:
             # continuum fitting
             # model flux at the blue edge
-            fl1 = pm.Normal("blue_fl", mu=self.blue_fl[0], sigma=self.blue_fl[1])
+            fl1 = pm.TruncatedNormal(
+                "blue_fl",
+                mu=self.blue_fl[0],
+                sigma=self.blue_fl[1],
+                lower=self.blue_fl[0] - self.blue_fl[1] * 3,
+                upper=self.blue_fl[0] + self.blue_fl[1] * 3,
+            )
             # model flux at the red edge
-            fl2 = pm.Normal("red_fl", mu=self.red_fl[0], sigma=self.red_fl[1])
+            fl2 = pm.TruncatedNormal(
+                "red_fl",
+                mu=self.red_fl[0],
+                sigma=self.red_fl[1],
+                lower=self.red_fl[0] - self.red_fl[1] * 3,
+                upper=self.red_fl[0] + self.red_fl[1] * 3,
+            )
 
             # Gaussian profile
             # amplitude
@@ -377,6 +411,8 @@ class SpecLine(object):
                     vel_mean_cov[j, k] = vel_mean_cov[k, j] = (
                         vel_mean_sig[j] ** 2 + vel_mean_sig[k] ** 2 - mean_diff**2
                     ) / 2
+                if np.any(np.linalg.eigvals(vel_mean_cov) < 0):
+                    raise ValueError("Covariance matrix not positive semi-definite!")
                 v_mean = pm.MvNormal("v_mean", mu=vel_mean_mu, cov=vel_mean_cov)
 
                 # velocity dispersion
@@ -586,7 +622,7 @@ class SpecLine(object):
         if len(self.vel_rf) < 200:
             vel_rf = np.linspace(self.vel_rf[0], self.vel_rf[-1], 200)
         else:
-            vel_rf = self.vel_rf
+            vel_rf = self.vel_rf_unmasked
         num = len(self.rel_strength)
         theta0 = theta[: 2 + 3 * num]
         j = 2 + 3 * num
@@ -619,16 +655,16 @@ class SpecLine(object):
                 self.lambda_0,
                 self.blue_vel,
                 self.red_vel,
-                self.vel_rf,
+                self.vel_rf_unmasked,
                 self.lines,
                 model=self.line_model,
             )
-            - self.norm_fl
+            - self.norm_fl_unmasked
         )
         ax.errorbar(
-            self.vel_rf,
-            self.norm_fl,
-            yerr=self.norm_fl_unc,
+            self.vel_rf_unmasked,
+            self.norm_fl_unmasked,
+            yerr=self.norm_fl_unc_unmasked,
             alpha=0.5,
             elinewidth=0.5,
             marker="o",
@@ -636,7 +672,7 @@ class SpecLine(object):
         )
         model_plot = plt.plot(vel_rf, model_flux, linewidth=5, color="k")
         ax.errorbar(
-            [self.vel_rf[0], self.vel_rf[-1]],
+            [self.vel_rf_unmasked[0], self.vel_rf_unmasked[-1]],
             [model_flux[0], model_flux[-1]],
             yerr=[self.blue_fl[1], self.red_fl[1]],
             color=model_plot[0].get_color(),
@@ -644,7 +680,7 @@ class SpecLine(object):
             markerfacecolor="w",
             capsize=5,
         )
-        ax.plot(self.vel_rf, model_res, color="grey")
+        ax.plot(self.vel_rf_unmasked, model_res, color="grey")
 
         if len(rel_strength) > 1:
             colors = [
@@ -664,11 +700,12 @@ class SpecLine(object):
                     self.lambda_0,
                     self.blue_vel,
                     self.red_vel,
-                    self.vel_rf,
+                    self.vel_rf_unmasked,
                     [self.lines[k]],
+                    model=self.line_model,
                 )
                 ax.plot(
-                    self.vel_rf,
+                    self.vel_rf_unmasked,
                     model_flux,
                     linewidth=2,
                     label=f"line_{k}",
@@ -678,6 +715,13 @@ class SpecLine(object):
 
         ax.set_xlabel(r"$v\ [\mathrm{km/s}]$")
         ax.set_ylabel(r"$\mathrm{Normalized\ Flux}$")
+
+        # mask
+        for mk in self.mask:
+            v_mk_1 = velocity_rf(mk[0], self.lambda_0)
+            v_mk_2 = velocity_rf(mk[1], self.lambda_0)
+            ax.axvspan(v_mk_1, v_mk_2, color="0.8", alpha=0.5)
+        # print(ax.get_ylim())
         if return_ax:
             return ax
         else:

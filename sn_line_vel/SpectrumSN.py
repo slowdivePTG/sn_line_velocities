@@ -6,6 +6,7 @@ import warnings
 from logging import raiseExceptions
 
 from .SpecLine import SpecLine
+from .tools.dust_extinction import calALambda
 
 mpl.rcParams["text.usetex"] = True  # only when producing plots for publication
 mpl.rcParams["font.family"] = "times new roman"
@@ -48,7 +49,9 @@ class SpectrumSN(object):
         pget the flux and its uncertainty at some given wavelength
     """
 
-    def __init__(self, spec1D, z=0, snr=20, spec_resolution=5, force_pos_flux=False):
+    def __init__(
+        self, spec1D, z=0, ebv=0, snr=None, spec_resolution=5, force_pos_flux=False
+    ):
         """Constructor
 
         Parameters
@@ -61,7 +64,10 @@ class SpectrumSN(object):
         z : float (default=0)
             host galaxy redshift
 
-        snr : float, default=20
+        ebv : float (default=0)
+            E(B-V), Galactic reddening
+
+        snr : float, default=None
             the assigned S/N for spectra with no flux errors
 
         spec_resolution : float, default=5
@@ -75,15 +81,19 @@ class SpectrumSN(object):
 
         wv = spec_df[0].values
         wv_rf = wv / (1 + z)
-        fl = spec_df[1].values
+        ALambda = calALambda(wv, RV=3.1, EBV=ebv)
+        fl = spec_df[1].values * 10 ** (0.4 * ALambda)
 
-        try:
-            fl_unc = spec_df[2].values
-        except:
-            warnings.warn("No flux uncertainty in the datafile!")
+        if snr == None:
+            try:
+                fl_unc = spec_df[2].values # * 10 ** (0.4 * ALambda)
+            except:
+                warnings.warn("No flux uncertainty in the datafile!")
+                warnings.warn(f"Please assign the S/N manually.")
+        else:
             # the same uncertainty is assigned to all the flux measurements
-            warnings.warn(f"Manual snr = {snr} assigned.")
-            fl_unc = np.ones_like(fl) * (np.nanmedian(fl) / snr)
+            warnings.warn(f"snr = {snr} assigned.")
+            fl_unc = np.ones_like(fl) * (np.nanmedian(fl) / snr) * (fl / np.nanmedian(fl))**-.5
 
         # make sure flux measurements are positive
         pos_flux = (fl > 0) | (force_pos_flux)
@@ -106,6 +116,8 @@ class SpectrumSN(object):
         free_rel_strength=[],
         bin=False,
         bin_size=1,
+        line_model="Gauss",
+        mask=[],
         plot_region=False,
     ):
         """Add one (series of) absorption line(s)
@@ -143,6 +155,8 @@ class SpectrumSN(object):
             free_rel_strength=free_rel_strength,
             bin=bin,
             bin_size=bin_size,
+            line_model=line_model,
+            mask=mask,
         )
         if plot_region:
             self.plot_line_region(blue_edge=blue_edge, red_edge=red_edge)
