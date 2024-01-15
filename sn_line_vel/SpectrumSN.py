@@ -86,14 +86,22 @@ class SpectrumSN(object):
 
         if snr == None:
             try:
-                fl_unc = spec_df[2].values # * 10 ** (0.4 * ALambda)
+                fl_unc = spec_df[2].values  # * 10 ** (0.4 * ALambda)
             except:
                 warnings.warn("No flux uncertainty in the datafile!")
                 warnings.warn(f"Please assign the S/N manually.")
         else:
             # the same uncertainty is assigned to all the flux measurements
-            warnings.warn(f"snr = {snr} assigned.")
-            fl_unc = np.ones_like(fl) * (np.nanmedian(fl) / snr) * (fl / np.nanmedian(fl))**-.5
+            warnings.warn("snr = {:.1f} assigned.".format(snr))
+            fl_unc = (
+                np.ones_like(fl)
+                * (np.nanmedian(fl) / snr)
+                * (
+                    np.where(fl > np.nanmedian(fl) / 10, fl, np.nanmedian(fl) / 10)
+                    / np.nanmedian(fl)
+                )
+                ** -0.5
+            )
 
         # make sure flux measurements are positive
         pos_flux = (fl > 0) | (force_pos_flux)

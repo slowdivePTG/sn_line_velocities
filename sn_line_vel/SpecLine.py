@@ -160,7 +160,7 @@ class SpecLine(object):
 
         if bin:
             print("binning spectrum...")
-            dat = data_binning(spec, size=bin_size)
+            dat = data_binning(spec, size=bin_size, spec_resolution=spec_resolution)
         else:
             dat = spec
         self.wv_rf, self.fl, self.fl_unc = dat[:, 0], dat[:, 1], dat[:, 2]
@@ -388,16 +388,16 @@ class SpecLine(object):
                 "blue_fl",
                 mu=self.blue_fl[0],
                 sigma=self.blue_fl[1],
-                lower=self.blue_fl[0] - self.blue_fl[1] * 3,
-                upper=self.blue_fl[0] + self.blue_fl[1] * 3,
+                lower=self.blue_fl[0] - self.blue_fl[1] * 2,
+                upper=self.blue_fl[0] + self.blue_fl[1] * 2,
             )
             # model flux at the red edge
             fl2 = pm.TruncatedNormal(
                 "red_fl",
                 mu=self.red_fl[0],
                 sigma=self.red_fl[1],
-                lower=self.red_fl[0] - self.red_fl[1] * 3,
-                upper=self.red_fl[0] + self.red_fl[1] * 3,
+                lower=self.red_fl[0] - self.red_fl[1] * 2,
+                upper=self.red_fl[0] + self.red_fl[1] * 2,
             )
 
             # Gaussian profile
@@ -550,6 +550,7 @@ class SpecLine(object):
 
         all = az.summary(trace, kind="stats")
         theta = [all["mean"]["blue_fl"], all["mean"]["red_fl"]]
+        sig_theta = [all["sd"]["blue_fl"], all["sd"]["red_fl"]]
         self.EW = []
         self.sig_EW = []
         for k in range(n_lines):
@@ -558,7 +559,12 @@ class SpecLine(object):
             theta.append(all["mean"][f"A[{k}]"])
             self.EW.append(all["mean"][f"EW_{k}"])
             self.sig_EW.append(all["sd"][f"EW_{k}"])
+
+            sig_theta.append(all["sd"][f"v_mean[{k}]"])
+            sig_theta.append(all["sd"][f"ln_v_sig[{k}]"])
+            sig_theta.append(all["sd"][f"A[{k}]"])
         self.theta_MCMC = theta
+        self.sig_theta_MCMC = sig_theta
 
         if find_MAP:
             neg_log_posterior = -np.array(trace.sample_stats.lp)
