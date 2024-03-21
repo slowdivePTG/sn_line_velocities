@@ -111,8 +111,6 @@ class SpecLine(object):
         lines=[],
         rel_strength=[],
         free_rel_strength=[],
-        bin=False,
-        bin_size=1,
         line_model="Gauss",
         mask=[],
     ):
@@ -158,11 +156,11 @@ class SpecLine(object):
             line regions to be masked in the fit
         """
 
-        if bin:
-            print("binning spectrum...")
-            dat = data_binning(spec, size=bin_size, spec_resolution=spec_resolution)
-        else:
-            dat = spec
+        # if bin:
+        #     print("binning spectrum...")
+        #     dat = data_binning(spec, size=bin_size, spec_resolution=spec_resolution)
+        # else:
+        dat = spec
         self.wv_rf, self.fl, self.fl_unc = dat[:, 0], dat[:, 1], dat[:, 2]
         self.spec_resolution = spec_resolution
         self.line_model = line_model
@@ -170,37 +168,46 @@ class SpecLine(object):
         # line region
         line_region = (self.wv_rf < red_edge) & (self.wv_rf > blue_edge)
         self.wv_line = self.wv_rf[line_region]
-        # masked line region
-        self.mask = mask
-        line_region_masked = line_region.copy()
-        for mk in mask:
-            line_region_masked &= (self.wv_rf < mk[0]) | (self.wv_rf > mk[1])
-        self.wv_line_masked = self.wv_rf[line_region_masked]
-        # print('{:.0f} points within {:.2f} and {:.2f} angstroms.'.format(
-        # len(line_region), blue_edge, red_edge))
 
         # normalized flux
-        norm_fl = self.fl / np.nanmedian(self.fl)
-        norm_fl_unc = self.fl_unc / np.nanmedian(self.fl)
-        self.norm_fl = norm_fl[line_region_masked]
-        self.norm_fl_unmasked = norm_fl[line_region]
+        norm_fl = self.fl[line_region] / np.nanmedian(self.fl[line_region])
+        norm_fl_unc = self.fl_unc[line_region] / np.nanmedian(self.fl[line_region])
 
         # check if there are points with relative uncertainty
         # two orders of magnitude lower than the median
-        norm_fl_unc = norm_fl_unc[line_region_masked]
-        rel_unc = norm_fl_unc / self.norm_fl
+        rel_unc = norm_fl_unc / norm_fl
         med_rel_unc = np.nanmedian(rel_unc)
         if rel_unc.min() < med_rel_unc / 1e2:
             warnings.warn("Some flux with extremely low uncertainty!")
             warnings.warn("New uncertainty assigned!")
         rel_unc[rel_unc < med_rel_unc / 1e2] = med_rel_unc
-        self.norm_fl_unc = rel_unc * self.norm_fl
+        norm_fl_unc = rel_unc * norm_fl
 
-        norm_fl = self.fl / np.nanmedian(self.fl)
-        norm_fl_unc = self.fl_unc / np.nanmedian(self.fl)
-        rel_unc = norm_fl_unc[line_region] / self.norm_fl_unmasked
-        med_rel_unc = np.nanmedian(rel_unc)
-        self.norm_fl_unc_unmasked = rel_unc * self.norm_fl_unmasked
+        # mask certain regions
+        self.mask = mask
+        line_region_masked = np.ones_like(self.wv_line, dtype=bool)
+        for mk in mask:
+            line_region_masked &= (self.wv_line < mk[0]) | (self.wv_line > mk[1])
+        self.wv_line_masked = self.wv_line[line_region_masked]
+
+        self.norm_fl = norm_fl[line_region_masked]
+        self.norm_fl_unmasked = norm_fl
+
+        self.norm_fl_unc = norm_fl_unc[line_region_masked]
+        self.norm_fl_unc_unmasked = norm_fl_unc
+
+        # calculate the covariance matrix & its determinant
+        # wv_A = np.repeat(self.wv_line_masked, len(self.wv_line_masked)).reshape(
+        #     len(self.wv_line_masked), -1
+        # )
+        # wv_B = wv_A.T
+        # if self.spec_resolution > 0:
+        #     rho = np.exp(
+        #         -((wv_A - wv_B) ** 2) / (2 * (self.spec_resolution / 2.355 / 2) ** 2)
+        #     )
+        # else:
+        #     rho = np.diag(np.ones_like(self.norm_fl_unc))
+        # self.norm_fl_cov = np.outer(self.norm_fl_unc, self.norm_fl_unc) * rho
 
         # flux at each edge
         range_l = red_edge - blue_edge
@@ -238,7 +245,7 @@ class SpecLine(object):
         self.lambda_0 = self.lines[0][-1]
         vel_rf = velocity_rf(self.wv_rf, self.lambda_0)
         self.vel_rf_unmasked = vel_rf[line_region]
-        self.vel_rf = vel_rf[line_region_masked]
+        self.vel_rf = vel_rf[line_region][line_region_masked]
 
         self.blue_vel = velocity_rf(blue_edge, self.lambda_0)
         self.red_vel = velocity_rf(red_edge, self.lambda_0)
@@ -419,9 +426,7 @@ class SpecLine(object):
                 ln_vel_sig_cov = np.diag(ln_vel_sig_sig) ** 2  # covariance matrix
                 for j, k, ln_sig_diff in ln_vel_sig_diff:
                     ln_vel_sig_cov[j, k] = ln_vel_sig_cov[k, j] = (
-                        ln_vel_sig_sig[j] ** 2
-                        + ln_vel_sig_sig[k] ** 2
-                        - ln_sig_diff**2
+                        ln_vel_sig_sig[j] ** 2 + ln_vel_sig_sig[k] ** 2 - ln_sig_diff**2
                     ) / 2
                 ln_v_sig = pm.MvNormal(
                     "ln_v_sig",
@@ -491,13 +496,16 @@ class SpecLine(object):
             )
 
             # uncertainty normalization
-            typical_unc = np.median(self.norm_fl_unc)
-            sigma_0 = pm.HalfCauchy("sigma_0", beta=typical_unc)
-            sigma = pm.Deterministic(
-                "sigma", (sigma_0**2 + self.norm_fl_unc**2) ** 0.5
-            )
+            # typical_unc = np.median(self.norm_fl_unc)
+            # sigma_0 = pm.HalfCauchy("sigma_0", beta=typical_unc)
+            # sigma = pm.Deterministic("sigma", (sigma_0**2 + self.norm_fl_unc**2) ** 0.5)
+
+            sigma = self.norm_fl_unc
 
             Flux = pm.Normal("Flux", mu=mu, sigma=sigma, observed=self.norm_fl)
+            # Flux = pm.MvNormal(
+            #     "Flux", mu=mu, cov=self.norm_fl_cov, observed=self.norm_fl
+            # )
 
         if plot_structure:
             pm.model_to_graphviz(GaussProfile)
@@ -512,7 +520,7 @@ class SpecLine(object):
             start["v_mean"] = initial[2::3]
             start["ln_v_sig"] = initial[3::3]
             start["A"] = initial[4::3]
-            start["sigma_0"] = 1e-3
+            # start["sigma_0"] = 1e-3
             for k, free in enumerate(self.free_rel_strength):
                 if free:
                     start[f"ratio_{k}"] = self.rel_strength[k]
@@ -534,7 +542,7 @@ class SpecLine(object):
                     tune=nburn,
                 )
         self.trace = trace
-        var_names_summary = ["v_mean", "v_sig", "A", "sigma_0"]
+        var_names_summary = ["v_mean", "v_sig", "A"]  # , "sigma_0"]
         for k in ratio_index:
             var_names_summary.append(f"ratio_{k}")
         for k in range(n_lines):
@@ -602,7 +610,210 @@ class SpecLine(object):
         else:
             return trace, GaussProfile
 
-    def plot_model(self, theta, return_ax=False, ax=None):
+    def nested_sampler(
+        self,
+        initial=[],
+        vel_mean_mu=[],
+        vel_mean_sig=[],
+        vel_mean_diff=[],
+        ln_vel_sig_mu=[],
+        ln_vel_sig_sig=[],
+        ln_vel_sig_diff=[],
+        A_lim=[-1e5, 1e5],
+        plot_model=True,
+        plot_nested=False,
+        log_dir=None,
+    ):
+        """nested sampler with UltraNest
+
+        Parameters
+        ----------
+
+        initial : array_like, default=[]
+             initial values for the MCMC sampler
+
+        vel_mean_mu, vel_mean_sig : array_like, default=[]
+            means/standard deviations of the velocity priors
+
+        vel_mean_diff : array_like, default=[]
+            standard deviations of the difference between velocity components
+            list of tuples - (j, k, v_diff) : Var(v_j - v_k) = v_diff**2
+
+        ln_vel_sig_mu, ln_vel_sig_sig : float, default=[]
+            means/standard deviations of the logarithmic velocity dispersion priors
+
+        ln_vel_sig_diff : array_like, default=[]
+            standard deviations of the difference between the logarithmic velocity dispersions
+            list of tuples - (j, k, ln_v_sig_diff) : Var(ln_v_sig_j - ln_v_sig_k) = ln_v_sig_diff**2
+
+        A_lim : float, default=[-1e5, 1e5]
+            allowed range of the amplitude
+
+        plot_model : bool, default=True
+            whether to plot the model v.s. data
+
+        plot_nested : bool, default=False
+            whether to plot the corner plots
+
+        log_dir : str, default=None
+            directory for the log files
+
+        Returns
+        -------
+        trace : arviz.data.inference_data.InferenceData
+            the samples drawn by the NUTS sampler
+        ax : matplotlib.axes
+            the axes with the plot
+        """
+        import ultranest
+
+        # import arviz as az
+        # import corner
+
+        n_lines = len(self.lines)
+
+        def prior_transform(u):
+            """
+            transform a uniform distribution to a prior of interest
+
+            Paramters
+            ---------
+            u : array_like
+                a list of parameters sampled from U(0, 1)
+                u[0:2] - fl1, fl2 ~ TruncatedNormal - flux at the blue/red edge
+                u[2::3] - vmean ~ MultiNormal - mean velocities of lines
+                u[3::3] - ln_v_sig ~ MultiNormal - logarithmic velocity dispersion of lines
+                u[4::3] - A ~ Uniform - amplitude
+            Returns
+            -------
+            """
+
+            from scipy import stats
+
+            # flux at the blue/red edge
+            # transform uniform distribution to truncated gaussian distribution
+            fl1 = stats.truncnorm.ppf(
+                u[0], -2, 2, loc=self.blue_fl[0], scale=self.blue_fl[1]
+            )
+            fl2 = stats.truncnorm.ppf(
+                u[1], -2, 2, loc=self.red_fl[0], scale=self.red_fl[1]
+            )
+
+            # amplitude
+            # transform uniform distribution to uniform distribution
+            A = (A_lim[1] - A_lim[0]) * u[4::3] + A_lim[0]
+
+            # velocity
+            # transform uniform distribution to multivariate normal distribution
+            if (len(vel_mean_mu) == n_lines) and (len(ln_vel_sig_mu) == n_lines):
+                # mean velocity
+                vel_mean_cov = np.diag(vel_mean_sig) ** 2
+                for j, k, mean_diff in vel_mean_diff:
+                    vel_mean_cov[j, k] = vel_mean_cov[k, j] = (
+                        vel_mean_sig[j] ** 2 + vel_mean_sig[k] ** 2 - mean_diff**2
+                    ) / 2
+                evalues, evectors = np.linalg.eig(vel_mean_cov)
+                assert np.all(
+                    evalues >= 0
+                ), "Covariance matrix not positive semi-definite!"
+                v_mean = (
+                    np.dot(
+                        evectors, np.dot(np.diag(evalues**0.5), stats.norm.ppf(u[2::3]))
+                    )  # square root of covariance matrix dot normal distribution
+                    + vel_mean_mu
+                )
+
+                # velocity dispersion
+                ln_vel_sig_cov = np.diag(ln_vel_sig_sig) ** 2
+                for j, k, ln_sig_diff in ln_vel_sig_diff:
+                    ln_vel_sig_cov[j, k] = ln_vel_sig_cov[k, j] = (
+                        ln_vel_sig_sig[j] ** 2 + ln_vel_sig_sig[k] ** 2 - ln_sig_diff**2
+                    ) / 2
+                evalues, evectors = np.linalg.eig(ln_vel_sig_cov)
+                assert np.all(
+                    evalues >= 0
+                ), "Covariance matrix not positive semi-definite!"
+                ln_v_sig = (
+                    np.dot(
+                        evectors, np.dot(np.diag(evalues**0.5), stats.norm.ppf(u[3::3]))
+                    )  # square root of covariance matrix dot normal distribution
+                    + ln_vel_sig_mu
+                )
+
+            else:
+                raise IndexError(
+                    "The number of the velocity priors does not match the number of lines"
+                )
+
+            theta = [fl1, fl2]
+            for k in range(n_lines):
+                theta += [v_mean[k], ln_v_sig[k], A[k]]
+
+            return theta
+
+        def log_likelihood(theta):
+            """
+            calculate the log likelihood of the model
+            """
+
+            # flux expectation
+            mu = calc_model_flux(
+                theta,
+                self.vel_resolution,
+                self.rel_strength,
+                self.lambda_0,
+                self.blue_vel,
+                self.red_vel,
+                self.vel_rf,
+                self.lines,
+                self.line_model,
+            )
+
+            return -0.5 * np.sum(
+                ((self.norm_fl - mu) / self.norm_fl_unc) ** 2
+            ) - 0.5 * np.sum(np.log(2 * np.pi * self.norm_fl_unc**2))
+
+            # return (
+            #     -0.5
+            #     * (self.norm_fl - mu)
+            #     @ np.linalg.inv(self.norm_fl_cov)
+            #     @ (self.norm_fl - mu).T
+            #     - 0.5 * np.log(self.norm_fl_cov_det)
+            #     - 0.5 * len(self.norm_fl) * np.log(2 * np.pi)
+            # )
+
+        param_names = ["fl1", "fl2"]
+        for k in range(n_lines):
+            param_names += [f"v_mean_{k}", f"ln_v_sig_{k}", f"A_{k}"]
+
+        sampler = ultranest.ReactiveNestedSampler(
+            param_names, log_likelihood, prior_transform, log_dir=log_dir
+        )
+        result = sampler.run()
+        sampler.print_results()
+
+        self.theta_nested = result["posterior"]["median"]
+        self.theta_nested_err = [
+            result["posterior"]["errlo"],
+            result["posterior"]["errup"],
+        ]
+
+        if plot_nested:
+            sampler.plot_corner()
+        if plot_model:
+            ax = self.plot_model(self.theta_nested, return_ax=True)
+            return result, ax
+        else:
+            return result
+
+    def plot_model(
+        self,
+        theta,
+        return_ax=False,
+        ax=None,
+        bin=True,
+        bin_size=None,
+    ):
         """plot the predicted absorption features
 
         Parameters
@@ -618,6 +829,12 @@ class SpecLine(object):
 
         ax : matplotlib axes
             if it is not None, plot on it
+
+        bin : bool, default=False
+            whether to bin the spectrum (for visualization)
+
+        bin_size : int, default=None
+            wavelength bin size (km s^-1)
         """
 
         print(f"Lambda_0 : {self.lambda_0} Ang")
@@ -629,6 +846,8 @@ class SpecLine(object):
             vel_rf = np.linspace(self.vel_rf[0], self.vel_rf[-1], 200)
         else:
             vel_rf = self.vel_rf_unmasked
+
+        # calculate the total flux from multiple lines
         num = len(self.rel_strength)
         theta0 = theta[: 2 + 3 * num]
         j = 2 + 3 * num
@@ -653,6 +872,30 @@ class SpecLine(object):
             self.lines,
             model=self.line_model,
         )
+
+        # bin the spectrum for visualization purposes
+        spec_plot = np.array(
+            [self.vel_rf_unmasked, self.norm_fl_unmasked, self.norm_fl_unc_unmasked]
+        ).T
+        if bin:
+            if bin_size == None:
+                bin_size = self.vel_resolution
+            print("binning spectrum for visualization...")
+            print(f"bin size: {bin_size} km/s")
+            spec_plot = data_binning(
+                spec_plot, size=bin_size, spec_resolution=self.vel_resolution
+            )
+        ax.errorbar(
+            spec_plot[:, 0],
+            spec_plot[:, 1],
+            yerr=spec_plot[:, 2],
+            alpha=0.5,
+            elinewidth=0.5,
+            marker="o",
+            zorder=-100,
+        )
+
+        # residual
         model_res = (
             calc_model_flux(
                 theta0,
@@ -667,15 +910,7 @@ class SpecLine(object):
             )
             - self.norm_fl_unmasked
         )
-        ax.errorbar(
-            self.vel_rf_unmasked,
-            self.norm_fl_unmasked,
-            yerr=self.norm_fl_unc_unmasked,
-            alpha=0.5,
-            elinewidth=0.5,
-            marker="o",
-            zorder=-100,
-        )
+
         model_plot = plt.plot(vel_rf, model_flux, linewidth=5, color="k")
         ax.errorbar(
             [self.vel_rf_unmasked[0], self.vel_rf_unmasked[-1]],
@@ -830,8 +1065,7 @@ def lnlike_gaussian_abs(theta, spec_line):
     lnl = (
         -0.5 * len(model_flux) * np.log(2 * np.pi)
         - np.sum(np.log(spec_line.norm_fl_unc))
-        - 0.5
-        * np.sum((spec_line.norm_fl - model_flux) ** 2 / spec_line.norm_fl_unc**2)
+        - 0.5 * np.sum((spec_line.norm_fl - model_flux) ** 2 / spec_line.norm_fl_unc**2)
     )
 
     return lnl

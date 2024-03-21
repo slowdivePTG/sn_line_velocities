@@ -122,8 +122,6 @@ class SpectrumSN(object):
         lines=[],
         rel_strength=[],
         free_rel_strength=[],
-        bin=False,
-        bin_size=1,
         line_model="Gauss",
         mask=[],
         plot_region=False,
@@ -161,8 +159,6 @@ class SpectrumSN(object):
             lines=lines,
             rel_strength=rel_strength,
             free_rel_strength=free_rel_strength,
-            bin=bin,
-            bin_size=bin_size,
             line_model=line_model,
             mask=mask,
         )
