@@ -623,6 +623,8 @@ class SpecLine(object):
         plot_model=True,
         plot_nested=False,
         log_dir=None,
+        slice=False,
+        slice_steps=100,
     ):
         """nested sampler with UltraNest
 
@@ -657,6 +659,12 @@ class SpecLine(object):
 
         log_dir : str, default=None
             directory for the log files
+
+        slice : bool, default=False
+            whether to use the slice sampler
+
+        slice_steps : int, default=100
+            number of steps for the slice sampler
 
         Returns
         -------
@@ -789,6 +797,14 @@ class SpecLine(object):
         sampler = ultranest.ReactiveNestedSampler(
             param_names, log_likelihood, prior_transform, log_dir=log_dir
         )
+        if slice:
+            import ultranest.stepsampler
+
+            sampler.stepsampler = ultranest.stepsampler.SliceSampler(
+                nsteps=slice_steps,
+                generate_direction=ultranest.stepsampler.generate_mixture_random_direction,
+            )
+
         result = sampler.run()
         sampler.print_results()
 
