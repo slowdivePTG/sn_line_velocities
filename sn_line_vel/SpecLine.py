@@ -314,6 +314,7 @@ class SpecLine(object):
         ln_vel_sig_min=[],
         ln_vel_sig_max=[],
         A_lim=[-1e5, 1e5],
+        fix_continuum=None,
         sampler="NUTS",
         nburn=2000,
         target_accept=0.8,
@@ -390,22 +391,25 @@ class SpecLine(object):
 
         with pm.Model() as GaussProfile:
             # continuum fitting
-            # model flux at the blue edge
-            fl1 = pm.TruncatedNormal(
-                "blue_fl",
-                mu=self.blue_fl[0],
-                sigma=self.blue_fl[1],
-                lower=self.blue_fl[0] - self.blue_fl[1] * 2,
-                upper=self.blue_fl[0] + self.blue_fl[1] * 2,
-            )
-            # model flux at the red edge
-            fl2 = pm.TruncatedNormal(
-                "red_fl",
-                mu=self.red_fl[0],
-                sigma=self.red_fl[1],
-                lower=self.red_fl[0] - self.red_fl[1] * 2,
-                upper=self.red_fl[0] + self.red_fl[1] * 2,
-            )
+            if fix_continuum is not None:
+                fl1 = fl2 = fix_continuum
+            else:
+                # model flux at the blue edge
+                fl1 = pm.TruncatedNormal(
+                    "blue_fl",
+                    mu=self.blue_fl[0],
+                    sigma=self.blue_fl[1],
+                    lower=self.blue_fl[0] - self.blue_fl[1] * 2,
+                    upper=self.blue_fl[0] + self.blue_fl[1] * 2,
+                )
+                # model flux at the red edge
+                fl2 = pm.TruncatedNormal(
+                    "red_fl",
+                    mu=self.red_fl[0],
+                    sigma=self.red_fl[1],
+                    lower=self.red_fl[0] - self.red_fl[1] * 2,
+                    upper=self.red_fl[0] + self.red_fl[1] * 2,
+                )
 
             # Gaussian profile
             # amplitude
@@ -612,7 +616,6 @@ class SpecLine(object):
 
     def nested_sampler(
         self,
-        initial=[],
         vel_mean_mu=[],
         vel_mean_sig=[],
         vel_mean_diff=[],
@@ -620,9 +623,12 @@ class SpecLine(object):
         ln_vel_sig_sig=[],
         ln_vel_sig_diff=[],
         A_lim=[-1e5, 1e5],
+        fix_continuum=None,
         plot_model=True,
         plot_nested=False,
         log_dir=None,
+        slice=False,
+        slice_steps=None,
     ):
         """nested sampler with UltraNest
 
@@ -649,6 +655,9 @@ class SpecLine(object):
         A_lim : float, default=[-1e5, 1e5]
             allowed range of the amplitude
 
+        fix_continuum : float, default=None
+            fixed continuum level
+
         plot_model : bool, default=True
             whether to plot the model v.s. data
 
@@ -657,6 +666,12 @@ class SpecLine(object):
 
         log_dir : str, default=None
             directory for the log files
+
+        slice : bool, default=False
+            whether to use the slice sampler
+
+        slice_steps : int, default=100
+            number of steps for the slice sampler
 
         Returns
         -------
@@ -680,7 +695,7 @@ class SpecLine(object):
             ---------
             u : array_like
                 a list of parameters sampled from U(0, 1)
-                u[0:2] - fl1, fl2 ~ TruncatedNormal - flux at the blue/red edge
+                u[0:2] - fl1, fl2 ~ TruncatedNormal - flux at the blue/red edge (if continuum is not fixed)
                 u[2::3] - vmean ~ MultiNormal - mean velocities of lines
                 u[3::3] - ln_v_sig ~ MultiNormal - logarithmic velocity dispersion of lines
                 u[4::3] - A ~ Uniform - amplitude
@@ -691,17 +706,24 @@ class SpecLine(object):
             from scipy import stats
 
             # flux at the blue/red edge
-            # transform uniform distribution to truncated gaussian distribution
-            fl1 = stats.truncnorm.ppf(
-                u[0], -2, 2, loc=self.blue_fl[0], scale=self.blue_fl[1]
-            )
-            fl2 = stats.truncnorm.ppf(
-                u[1], -2, 2, loc=self.red_fl[0], scale=self.red_fl[1]
-            )
+            if fix_continuum is not None:
+                fl1 = fl2 = fix_continuum
+                n_params_init = 0
+            else:
+                # transform uniform distribution to truncated gaussian distribution
+                fl1 = stats.truncnorm.ppf(
+                    u[0], -2, 2, loc=self.blue_fl[0], scale=self.blue_fl[1]
+                )
+                fl2 = stats.truncnorm.ppf(
+                    u[1], -2, 2, loc=self.red_fl[0], scale=self.red_fl[1]
+                )
+                n_params_init = 2
 
             # amplitude
             # transform uniform distribution to uniform distribution
-            A = (A_lim[1] - A_lim[0]) * u[4::3] + A_lim[0]
+            A = (A_lim[1] - A_lim[0]) * u[
+                2 + n_params_init :: 1 + n_params_init
+            ] + A_lim[0]
 
             # velocity
             # transform uniform distribution to multivariate normal distribution
@@ -718,7 +740,10 @@ class SpecLine(object):
                 ), "Covariance matrix not positive semi-definite!"
                 v_mean = (
                     np.dot(
-                        evectors, np.dot(np.diag(evalues**0.5), stats.norm.ppf(u[2::3]))
+                        evectors,
+                        np.dot(
+                            np.diag(evalues**0.5), stats.norm.ppf(u[n_params_init::3])
+                        ),
                     )  # square root of covariance matrix dot normal distribution
                     + vel_mean_mu
                 )
@@ -735,7 +760,11 @@ class SpecLine(object):
                 ), "Covariance matrix not positive semi-definite!"
                 ln_v_sig = (
                     np.dot(
-                        evectors, np.dot(np.diag(evalues**0.5), stats.norm.ppf(u[3::3]))
+                        evectors,
+                        np.dot(
+                            np.diag(evalues**0.5),
+                            stats.norm.ppf(u[1 + n_params_init :: 3]),
+                        ),
                     )  # square root of covariance matrix dot normal distribution
                     + ln_vel_sig_mu
                 )
@@ -744,8 +773,10 @@ class SpecLine(object):
                 raise IndexError(
                     "The number of the velocity priors does not match the number of lines"
                 )
-
-            theta = [fl1, fl2]
+            if fix_continuum is not None:
+                theta = []
+            else:
+                theta = [fl1, fl2]
             for k in range(n_lines):
                 theta += [v_mean[k], ln_v_sig[k], A[k]]
 
@@ -755,6 +786,9 @@ class SpecLine(object):
             """
             calculate the log likelihood of the model
             """
+
+            if fix_continuum:
+                theta = np.append([fix_continuum] * 2, theta)
 
             # flux expectation
             mu = calc_model_flux(
@@ -782,14 +816,27 @@ class SpecLine(object):
             #     - 0.5 * len(self.norm_fl) * np.log(2 * np.pi)
             # )
 
-        param_names = ["fl1", "fl2"]
+        if fix_continuum is not None:
+            param_names = []
+        else:
+            param_names = ["fl1", "fl2"]
         for k in range(n_lines):
             param_names += [f"v_mean_{k}", f"ln_v_sig_{k}", f"A_{k}"]
 
         sampler = ultranest.ReactiveNestedSampler(
             param_names, log_likelihood, prior_transform, log_dir=log_dir
         )
-        result = sampler.run()
+        if slice:
+            import ultranest.stepsampler
+
+            if slice_steps == None:
+                slice_steps = 2 * len(param_names)
+            sampler.stepsampler = ultranest.stepsampler.SliceSampler(
+                nsteps=slice_steps,
+                generate_direction=ultranest.stepsampler.generate_mixture_random_direction,
+            )
+
+        result = sampler.run(max_num_improvement_loops=3)
         sampler.print_results()
 
         self.theta_nested = result["posterior"]["median"]
