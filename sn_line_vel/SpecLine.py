@@ -561,8 +561,12 @@ class SpecLine(object):
         print(summary)
 
         all = az.summary(trace, kind="stats")
-        theta = [all["mean"]["blue_fl"], all["mean"]["red_fl"]]
-        sig_theta = [all["sd"]["blue_fl"], all["sd"]["red_fl"]]
+        if fix_continuum is not None:
+            theta = []
+            sig_theta = []
+        else:
+            theta = [all["mean"]["blue_fl"], all["mean"]["red_fl"]]
+            sig_theta = [all["sd"]["blue_fl"], all["sd"]["red_fl"]]
         self.EW = []
         self.sig_EW = []
         for k in range(n_lines):
@@ -607,9 +611,17 @@ class SpecLine(object):
                 warnings.warn("The model from the MAP estimators are shown.")
                 warnings.warn("The corresponding parameters:")
                 print(self.theta_MAP)
-                ax = self.plot_model(self.theta_MAP, return_ax=True)
+                if fix_continuum is not None:
+                    theta_MAP = [fix_continuum] * 2 + self.theta_MAP
+                else:
+                    theta_MAP = self.theta_MAP
+                ax = self.plot_model(theta_MAP, return_ax=True)
             else:
-                ax = self.plot_model(self.theta_MCMC, return_ax=True)
+                if fix_continuum is not None:
+                    theta_MCMC = [fix_continuum] * 2 + self.theta_MCMC
+                else:
+                    theta_MCMC = self.theta_MCMC
+                ax = self.plot_model(theta_MCMC, return_ax=True)
             return trace, GaussProfile, ax
         else:
             return trace, GaussProfile
@@ -787,7 +799,7 @@ class SpecLine(object):
             calculate the log likelihood of the model
             """
 
-            if fix_continuum:
+            if fix_continuum is not None:
                 theta = np.append([fix_continuum] * 2, theta)
 
             # flux expectation
@@ -838,7 +850,7 @@ class SpecLine(object):
 
         result = sampler.run(max_num_improvement_loops=3)
         sampler.print_results()
-
+        
         self.theta_nested = result["posterior"]["median"]
         self.theta_nested_err = [
             result["posterior"]["errlo"],
@@ -848,7 +860,11 @@ class SpecLine(object):
         if plot_nested:
             sampler.plot_corner()
         if plot_model:
-            ax = self.plot_model(self.theta_nested, return_ax=True)
+            if fix_continuum is not None:
+                theta_nested = [fix_continuum] * 2 + self.theta_nested
+            else:
+                theta_nested = self.theta_nested
+            ax = self.plot_model(theta_nested, return_ax=True)
             return result, ax
         else:
             return result
