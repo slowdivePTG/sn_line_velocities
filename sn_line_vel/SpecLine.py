@@ -211,11 +211,11 @@ class SpecLine(object):
 
         # flux at each edge
         range_l = red_edge - blue_edge
-        delta_l = min(100, range_l / 10)
+        delta_l = min(self.spec_resolution * 3, range_l / 10)
         blue_fl = self.get_flux_at_lambda(blue_edge, delta_l=delta_l)
         red_fl = self.get_flux_at_lambda(red_edge, delta_l=delta_l)
-        self.blue_fl = blue_fl / np.nanmedian(self.fl)
-        self.red_fl = red_fl / np.nanmedian(self.fl)
+        self.blue_fl = blue_fl / np.nanmedian(self.fl[line_region])
+        self.red_fl = red_fl / np.nanmedian(self.fl[line_region])
 
         # velocity
         try:
@@ -450,9 +450,7 @@ class SpecLine(object):
                         -pm.math.log1pexp((ln_v_sig - ln_vel_sig_max) * 5**2),
                     )
             else:
-                raise IndexError(
-                    "The number of the velocity priors does not match the number of lines"
-                )
+                raise IndexError("The number of the velocity priors does not match the number of lines")
 
             v_sig = pm.Deterministic("v_sig", np.exp(ln_v_sig))
             theta = [fl1, fl2]
@@ -465,12 +463,8 @@ class SpecLine(object):
                 if free:
                     ratio_index.append(k)
                     log_ratio_0 = np.log10(self.rel_strength[k])
-                    log_rel_strength_k = pm.Normal(
-                        f"log_ratio_{k}", mu=log_ratio_0, sigma=0.1
-                    )
-                    rel_strength.append(
-                        pm.Deterministic(f"ratio_{k}", 10**log_rel_strength_k)
-                    )
+                    log_rel_strength_k = pm.Normal(f"log_ratio_{k}", mu=log_ratio_0, sigma=0.1)
+                    rel_strength.append(pm.Deterministic(f"ratio_{k}", 10**log_rel_strength_k))
                 else:
                     rel_strength.append(self.rel_strength[k])
                 # equivalent width
@@ -584,9 +578,7 @@ class SpecLine(object):
 
         if find_MAP:
             neg_log_posterior = -np.array(trace.sample_stats.lp)
-            ind = np.unravel_index(
-                np.argmin(neg_log_posterior, axis=None), neg_log_posterior.shape
-            )
+            ind = np.unravel_index(np.argmin(neg_log_posterior, axis=None), neg_log_posterior.shape)
             theta_MAP = [
                 np.array(trace.posterior["blue_fl"])[ind],
                 np.array(trace.posterior["red_fl"])[ind],
@@ -723,19 +715,13 @@ class SpecLine(object):
                 n_params_init = 0
             else:
                 # transform uniform distribution to truncated gaussian distribution
-                fl1 = stats.truncnorm.ppf(
-                    u[0], -2, 2, loc=self.blue_fl[0], scale=self.blue_fl[1]
-                )
-                fl2 = stats.truncnorm.ppf(
-                    u[1], -2, 2, loc=self.red_fl[0], scale=self.red_fl[1]
-                )
+                fl1 = stats.truncnorm.ppf(u[0], -2, 2, loc=self.blue_fl[0], scale=self.blue_fl[1])
+                fl2 = stats.truncnorm.ppf(u[1], -2, 2, loc=self.red_fl[0], scale=self.red_fl[1])
                 n_params_init = 2
 
             # amplitude
             # transform uniform distribution to uniform distribution
-            A = (A_lim[1] - A_lim[0]) * u[
-                2 + n_params_init :: 1 + n_params_init
-            ] + A_lim[0]
+            A = (A_lim[1] - A_lim[0]) * u[2 + n_params_init :: 1 + n_params_init] + A_lim[0]
 
             # velocity
             # transform uniform distribution to multivariate normal distribution
@@ -747,15 +733,11 @@ class SpecLine(object):
                         vel_mean_sig[j] ** 2 + vel_mean_sig[k] ** 2 - mean_diff**2
                     ) / 2
                 evalues, evectors = np.linalg.eig(vel_mean_cov)
-                assert np.all(
-                    evalues >= 0
-                ), "Covariance matrix not positive semi-definite!"
+                assert np.all(evalues >= 0), "Covariance matrix not positive semi-definite!"
                 v_mean = (
                     np.dot(
                         evectors,
-                        np.dot(
-                            np.diag(evalues**0.5), stats.norm.ppf(u[n_params_init::3])
-                        ),
+                        np.dot(np.diag(evalues**0.5), stats.norm.ppf(u[n_params_init::3])),
                     )  # square root of covariance matrix dot normal distribution
                     + vel_mean_mu
                 )
@@ -767,9 +749,7 @@ class SpecLine(object):
                         ln_vel_sig_sig[j] ** 2 + ln_vel_sig_sig[k] ** 2 - ln_sig_diff**2
                     ) / 2
                 evalues, evectors = np.linalg.eig(ln_vel_sig_cov)
-                assert np.all(
-                    evalues >= 0
-                ), "Covariance matrix not positive semi-definite!"
+                assert np.all(evalues >= 0), "Covariance matrix not positive semi-definite!"
                 ln_v_sig = (
                     np.dot(
                         evectors,
@@ -782,9 +762,7 @@ class SpecLine(object):
                 )
 
             else:
-                raise IndexError(
-                    "The number of the velocity priors does not match the number of lines"
-                )
+                raise IndexError("The number of the velocity priors does not match the number of lines")
             if fix_continuum is not None:
                 theta = []
             else:
@@ -815,9 +793,9 @@ class SpecLine(object):
                 self.line_model,
             )
 
-            return -0.5 * np.sum(
-                ((self.norm_fl - mu) / self.norm_fl_unc) ** 2
-            ) - 0.5 * np.sum(np.log(2 * np.pi * self.norm_fl_unc**2))
+            return -0.5 * np.sum(((self.norm_fl - mu) / self.norm_fl_unc) ** 2) - 0.5 * np.sum(
+                np.log(2 * np.pi * self.norm_fl_unc**2)
+            )
 
             # return (
             #     -0.5
@@ -835,9 +813,7 @@ class SpecLine(object):
         for k in range(n_lines):
             param_names += [f"v_mean_{k}", f"ln_v_sig_{k}", f"A_{k}"]
 
-        sampler = ultranest.ReactiveNestedSampler(
-            param_names, log_likelihood, prior_transform, log_dir=log_dir
-        )
+        sampler = ultranest.ReactiveNestedSampler(param_names, log_likelihood, prior_transform, log_dir=log_dir)
         if slice:
             import ultranest.stepsampler
 
@@ -850,7 +826,7 @@ class SpecLine(object):
 
         result = sampler.run(max_num_improvement_loops=3)
         sampler.print_results()
-        
+
         self.theta_nested = result["posterior"]["median"]
         self.theta_nested_err = [
             result["posterior"]["errlo"],
@@ -921,9 +897,7 @@ class SpecLine(object):
                     rel_strength[k][rel_s] = 10 ** theta[j]
                     j += 1
         if j != len(theta):
-            raise IndexError(
-                "Number of free parameters and relative strength do not match"
-            )
+            raise IndexError("Number of free parameters and relative strength do not match")
         model_flux = calc_model_flux(
             theta0,
             self.vel_resolution,
@@ -937,16 +911,17 @@ class SpecLine(object):
         )
 
         # bin the spectrum for visualization purposes
-        spec_plot = np.array(
-            [self.vel_rf_unmasked, self.norm_fl_unmasked, self.norm_fl_unc_unmasked]
-        ).T
+        spec_plot = np.array([self.vel_rf_unmasked, self.norm_fl_unmasked, self.norm_fl_unc_unmasked]).T
         if bin:
             if bin_size == None:
-                bin_size = self.vel_resolution
+                bin_size = self.vel_resolution * 2.355
             print("binning spectrum for visualization...")
-            print(f"bin size: {bin_size} km/s")
+            print(f"bin size: {bin_size:.0f} km/s")
             spec_plot = data_binning(
-                spec_plot, size=bin_size, spec_resolution=self.vel_resolution
+                spec_plot,
+                size=bin_size,
+                spec_resolution=self.vel_resolution,
+                sigma_clip=2,
             )
         ax.errorbar(
             spec_plot[:, 0],
@@ -967,11 +942,11 @@ class SpecLine(object):
                 self.lambda_0,
                 self.blue_vel,
                 self.red_vel,
-                self.vel_rf_unmasked,
+                spec_plot[:, 0],
                 self.lines,
                 model=self.line_model,
             )
-            - self.norm_fl_unmasked
+            - spec_plot[:, 1]
         )
 
         model_plot = plt.plot(vel_rf, model_flux, linewidth=5, color="k")
@@ -984,7 +959,7 @@ class SpecLine(object):
             markerfacecolor="w",
             capsize=5,
         )
-        ax.plot(self.vel_rf_unmasked, model_res, color="grey")
+        ax.plot(spec_plot[:, 0], model_res, color="grey")
 
         if len(rel_strength) > 1:
             colors = [
@@ -1031,7 +1006,7 @@ class SpecLine(object):
         else:
             plt.show()
 
-    def get_flux_at_lambda(self, lambda_0, delta_l=50):
+    def get_flux_at_lambda(self, lambda_0, delta_l=None):
         """Get the flux and uncertainty at some given wavelength
 
         Returns the mean and uncertainty of flux in the
@@ -1057,6 +1032,8 @@ class SpecLine(object):
                 flux uncertainty given
         """
 
+        if delta_l == None:
+            delta_l = self.spec_resolution * 3
         region = np.where(np.abs(self.wv_rf - lambda_0) < delta_l)[0]
         try:
             if len(region) == 0:
@@ -1065,12 +1042,15 @@ class SpecLine(object):
                 warnings.warn("Too few points within the wavelength range!")
                 return (self.fl[region[0]], self.fl_unc[region[0]])
             else:
+                mean = np.sum(self.fl[region] / self.fl_unc[region] ** 2) / np.sum(1 / self.fl_unc[region] ** 2)
+                from astropy.stats import mad_std
+
+                std = mad_std(self.fl[region])
                 if len(region) <= 5:
                     warnings.warn("<=5 points within the wavelength range!")
-                mean = np.sum(self.fl[region] / self.fl_unc[region] ** 2) / np.sum(
-                    1 / self.fl_unc[region] ** 2
-                )
-                std = np.nanmin(self.fl_unc[region])
+                    std = np.nanmedian(self.fl_unc[region])
+
+                # std = np.nanmin(self.fl_unc[region])
                 # std = np.std(self.fl[region], ddof=1)
             return (mean, std)
         except IndexError as e:
