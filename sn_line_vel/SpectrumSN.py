@@ -1,5 +1,3 @@
-import matplotlib as mpl
-import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 import warnings
@@ -7,12 +5,7 @@ from logging import raiseExceptions
 
 from .SpecLine import SpecLine
 from .tools.dust_extinction import calALambda
-
-mpl.rcParams["text.usetex"] = True  # only when producing plots for publication
-mpl.rcParams["font.family"] = "times new roman"
-mpl.rcParams["font.size"] = "25"
-mpl.rcParams["xtick.labelsize"] = "20"
-mpl.rcParams["ytick.labelsize"] = "20"
+from .tools._plt import plt
 
 
 ##################### SpectrumSN class ##########################
@@ -77,7 +70,13 @@ class SpectrumSN(object):
             remove all the non-positive flux measurements
         """
 
-        spec_df = pd.read_csv(spec1D, comment="#", delim_whitespace=True, header=None)
+        spec_df = pd.read_csv(
+            spec1D,
+            comment="#",
+            delim_whitespace=True,
+            header=None,
+            skip_blank_lines=True,
+        )
 
         wv = spec_df[0].values
         wv_rf = wv / (1 + z)
@@ -104,7 +103,7 @@ class SpectrumSN(object):
             )
 
         # make sure flux measurements are positive
-        pos_flux = (fl > 0) | (force_pos_flux)
+        pos_flux = (fl > 0) | (not force_pos_flux)
         self.fl = fl[pos_flux]
         self.wv_rf = wv_rf[pos_flux]
         self.fl_unc = fl_unc[pos_flux]

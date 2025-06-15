@@ -1,18 +1,12 @@
 import matplotlib as mpl
 from scipy.optimize import minimize
-import matplotlib.pyplot as plt
 import numpy as np
 import warnings
 from logging import raiseExceptions
 
 from .tools.data_binning import data_binning
 from .tools.flux_model import velocity_rf, calc_model_flux
-
-mpl.rcParams["text.usetex"] = True  # only when producing plots for publication
-mpl.rcParams["font.family"] = "times new roman"
-mpl.rcParams["font.size"] = "25"
-mpl.rcParams["xtick.labelsize"] = "20"
-mpl.rcParams["ytick.labelsize"] = "20"
+from .tools._plt import plt
 
 
 class SpecLine(object):
@@ -468,7 +462,7 @@ class SpecLine(object):
                 else:
                     rel_strength.append(self.rel_strength[k])
                 # equivalent width
-                EW_k = pm.Deterministic(
+                pm.Deterministic(
                     f"EW_{k}",
                     -A[k]
                     / (self.red_vel - self.blue_vel)
@@ -573,6 +567,10 @@ class SpecLine(object):
             sig_theta.append(all["sd"][f"v_mean[{k}]"])
             sig_theta.append(all["sd"][f"ln_v_sig[{k}]"])
             sig_theta.append(all["sd"][f"A[{k}]"])
+        # Append all the ratios
+        for k in ratio_index:
+            theta.append(all["mean"][f"ratio_{k}"])
+            sig_theta.append(all["sd"][f"ratio_{k}"])
         self.theta_MCMC = theta
         self.sig_theta_MCMC = sig_theta
 
