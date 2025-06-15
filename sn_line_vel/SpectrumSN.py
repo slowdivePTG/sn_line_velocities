@@ -111,7 +111,7 @@ class SpectrumSN(object):
         # self.snr = snr
         self.spec_resolution = spec_resolution
 
-        self.line = {}
+        self.line: dict[str, SpecLine] = {}
 
     def add_line(
         self,

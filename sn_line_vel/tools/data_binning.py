@@ -75,7 +75,7 @@ def data_binning(
     return np.array(data_bin)
 
 
-def plot_box_spec(wave, flux):
+def get_box_spec(wave, flux):
     flux_plot = np.repeat(flux, 2)
     wv_plot = wave.copy()
     wv_plot[:-1] += np.diff(wave) / 2
