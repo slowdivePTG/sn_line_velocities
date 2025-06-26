@@ -1,7 +1,5 @@
-import pandas as pd
 import numpy as np
 import warnings
-from logging import raiseExceptions
 
 from .SpecLine import SpecLine
 from .tools.dust_extinction import calALambda
@@ -70,25 +68,18 @@ class SpectrumSN(object):
             remove all the non-positive flux measurements
         """
 
-        spec_df = pd.read_csv(
-            spec1D,
-            comment="#",
-            delim_whitespace=True,
-            header=None,
-            skip_blank_lines=True,
-        )
+        spec = np.loadtxt(spec1D, comments="#", delimiter=None, unpack=False)
 
-        wv = spec_df[0].values
+        wv = spec[:, 0]
         wv_rf = wv / (1 + z)
-        ALambda = calALambda(wv, RV=3.1, EBV=ebv)
-        fl = spec_df[1].values * 10 ** (0.4 * ALambda)
+        aLambda = calALambda(wv, RV=3.1, EBV=ebv)
+        fl = spec[:, 1] * 10 ** (0.4 * aLambda)
 
-        if snr == None:
-            try:
-                fl_unc = spec_df[2].values  # * 10 ** (0.4 * ALambda)
-            except:
-                warnings.warn("No flux uncertainty in the datafile!")
-                warnings.warn(f"Please assign the S/N manually.")
+        if snr is None:
+            if spec.shape[1] == 3:
+                fl_unc = spec[:, 2] * 10 ** (0.4 * aLambda)
+            else:
+                raise ValueError("No flux uncertainty in the datafile!")
         else:
             # the same uncertainty is assigned to all the flux measurements
             warnings.warn("snr = {:.1f} assigned.".format(snr))
