@@ -41,7 +41,7 @@ class SpectrumSN(object):
     """
 
     def __init__(
-        self, spec1D, z=0, ebv=0, snr=None, spec_resolution=5, force_pos_flux=False
+        self, spec1D, z=0, ebv_mw=0, ebv_host=0, rv_host=3.1, snr=None, spec_resolution=5, force_pos_flux=False
     ):
         """Constructor
 
@@ -55,8 +55,11 @@ class SpectrumSN(object):
         z : float (default=0)
             host galaxy redshift
 
-        ebv : float (default=0)
+        ebv_mw : float (default=0)
             E(B-V), Galactic reddening
+
+        ebv_host : float (default=0)
+            E(B-V), host galaxy reddening
 
         snr : float, default=None
             the assigned S/N for spectra with no flux errors
@@ -72,7 +75,9 @@ class SpectrumSN(object):
 
         wv = spec[:, 0]
         wv_rf = wv / (1 + z)
-        aLambda = calALambda(wv, RV=3.1, EBV=ebv)
+        aLambda_mw = calALambda(wv, RV=3.1, EBV=ebv_mw)
+        aLambda_host = calALambda(wv_rf, RV=rv_host, EBV=ebv_host)
+        aLambda = aLambda_mw + aLambda_host
         fl = spec[:, 1] * 10 ** (0.4 * aLambda)
 
         if snr is None:

@@ -165,6 +165,7 @@ class SpecLine(object):
 
         # normalized flux
         norm_factor = np.nanmedian(self.fl[line_region & (self.fl > 0)])
+        self.norm_factor = norm_factor
         norm_fl = self.fl[line_region] / norm_factor
         norm_fl_unc = self.fl_unc[line_region] / norm_factor
 
@@ -496,11 +497,11 @@ class SpecLine(object):
             )
 
             # uncertainty normalization
-            # typical_unc = np.median(self.norm_fl_unc)
-            # sigma_0 = pm.HalfCauchy("sigma_0", beta=typical_unc)
-            # sigma = pm.Deterministic("sigma", (sigma_0**2 + self.norm_fl_unc**2) ** 0.5)
+            typical_unc = np.median(self.norm_fl_unc)
+            sigma_0 = pm.HalfCauchy("sigma_0", beta=typical_unc)
+            sigma = pm.Deterministic("sigma", (sigma_0**2 + self.norm_fl_unc**2) ** 0.5)
 
-            sigma = self.norm_fl_unc
+            # sigma = self.norm_fl_unc
 
             Flux = pm.Normal("Flux", mu=mu, sigma=sigma, observed=self.norm_fl)
             # Flux = pm.MvNormal(
